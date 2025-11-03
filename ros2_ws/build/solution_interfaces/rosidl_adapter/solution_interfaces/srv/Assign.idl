@@ -1,0 +1,17 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from solution_interfaces/srv/Assign.srv
+// generated code does not contain a copyright notice
+
+
+module solution_interfaces {
+  module srv {
+    struct Assign_Request {
+      string drone_name;
+
+      string role;
+    };
+    struct Assign_Response {
+      boolean success;
+    };
+  };
+};
