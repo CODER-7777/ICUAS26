@@ -1,4 +1,4 @@
-// mkdir build
+// cd build
 // cmake .. (only once)
 // make
 // cd ..
