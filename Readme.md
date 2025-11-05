@@ -1,1 +1,1 @@
-GetMetricMin : The getMetricMin method, which is part of the OctoMap library (an OcTree implementation), is used to find the minimum coordinate corner of the axis-aligned bounding box (AABB) that encloses all the nodes (voxels) in your 3D map.
+
