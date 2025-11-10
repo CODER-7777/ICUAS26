@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
             
             // Adjust this epsilon value to get more or less detail
             // Smaller value = more detail, Larger value = less detail
-            double epsilon = 0.01* arcLength(contours[j], true); 
+            double epsilon = 0.007* arcLength(contours[j], true); 
             approxPolyDP(contours[j], approx_poly, epsilon, true);
 
             waypoints_per_building.push_back(approx_poly); // Save the simplified polygon

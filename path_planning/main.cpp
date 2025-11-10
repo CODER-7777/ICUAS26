@@ -140,6 +140,19 @@ int main() {
     }
     path_file.close();
 
+    // === Write corresponding coordinates to final_path_coordinates.csv ===
+    std::cout << "Writing final_path_coordinates.csv..." << std::endl;
+    std::ofstream coord_file("final_path_coordinates.csv");
+    coord_file << "x,y,z\n";  // CSV header
+    for (int v_id : final_tour_path) {
+        const Point3D& p = all_vertices.at(v_id);
+        coord_file << p.x << "," 
+                   << p.y << "," 
+                   << p.z << "\n";
+    }
+    coord_file.close();
+
+
     // Print the path
     for (size_t i = 0; i < final_tour_path.size(); ++i) {
         std::cout << final_tour_path[i];
@@ -149,9 +162,6 @@ int main() {
     }
     std::cout << std::endl;
     std::cout << "\nPath contains " << final_tour_path.size() << " steps (vertices)." << std::endl;
-
-    system("python plotter.py");
-
 
     return 0;
 }
