@@ -1,0 +1,27 @@
+name: icuas_competition_example
+root: ./
+startup_window: crazyflies_start
+pre_window: |
+  source <%= @settings["setup_name"] %>
+windows:
+  - crazyflies_start:
+      layout: tiled
+      panes:
+        - bash /root/ros2_ws/src/icuas26_competition/launch/sitl_multiagent_text.sh -m crazyflie -f $SPAWN_POSE_DOC -w $ENV_NAME -n $NUM_ROBOTS
+        - waitForCfsGazebo;sleep 1;bash ./generate_gazebo_bridge_yaml.sh $NUM_ROBOTS; ros2 launch icuas26_competition system_launch.py
+        - waitForCfsGazebo;sleep 3;ros2 launch icuas26_competition aruco_recognition.launch.py
+        - waitForCfsGazebo;sleep 6;ros2 launch icuas26_competition octomap_server.launch.py
+  - clock_start:
+      layout: tiled
+      panes:
+        - waitForCfsGazebo;sleep 8;ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
+  - node_start:
+      layout: tiled
+      panes:
+        - waitForCfsGazebo;sleep 10;ros2 run aruco_mission aruco_mission_node --ros-args -p use_sim_time:=true
+  - target_found: 
+      layout: titled
+      panes:
+        - waitForCfsGazebo;sleep 12;ros2 topic echo /cf_1/target_found
+
+ 
