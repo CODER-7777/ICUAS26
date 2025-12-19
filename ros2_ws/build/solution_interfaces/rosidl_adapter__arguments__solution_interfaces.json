@@ -1,6 +1,0 @@
-{
-  "package_name": "solution_interfaces",
-  "non_idl_tuples": [
-    "/root/solution/ros2_ws/src/solution_interfaces:srv/Assign.srv"
-  ]
-}

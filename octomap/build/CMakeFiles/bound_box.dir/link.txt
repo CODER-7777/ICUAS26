@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/bound_box.dir/bound_box.cpp.o -o bound_box  /usr/lib/x86_64-linux-gnu/liboctomap.so /usr/lib/x86_64-linux-gnu/liboctomath.so /usr/lib/x86_64-linux-gnu/libopencv_imgcodecs.so.4.5.4d /usr/lib/x86_64-linux-gnu/libopencv_imgproc.so.4.5.4d /usr/lib/x86_64-linux-gnu/libopencv_core.so.4.5.4d 

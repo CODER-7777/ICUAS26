@@ -1,4 +1,0 @@
-[console_scripts]
-drone_role = solution.drone_role:main
-tagger_drone = solution.tagger_drone:main
-
