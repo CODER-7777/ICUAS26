@@ -1,0 +1,43 @@
+running egg_info
+creating ../../build/solution/solution.egg-info
+writing ../../build/solution/solution.egg-info/PKG-INFO
+writing dependency_links to ../../build/solution/solution.egg-info/dependency_links.txt
+writing entry points to ../../build/solution/solution.egg-info/entry_points.txt
+writing requirements to ../../build/solution/solution.egg-info/requires.txt
+writing top-level names to ../../build/solution/solution.egg-info/top_level.txt
+writing manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+reading manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /root/solution/ros2_ws/build/solution/build
+creating /root/solution/ros2_ws/build/solution/build/lib
+creating /root/solution/ros2_ws/build/solution/build/lib/solution
+copying solution/__init__.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+copying solution/tagger_drone.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+copying solution/drone_role.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+copying solution/center_role.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+running install
+running install_lib
+creating /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+copying /root/solution/ros2_ws/build/solution/build/lib/solution/__init__.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+copying /root/solution/ros2_ws/build/solution/build/lib/solution/tagger_drone.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+copying /root/solution/ros2_ws/build/solution/build/lib/solution/drone_role.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+copying /root/solution/ros2_ws/build/solution/build/lib/solution/center_role.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/__init__.py to __init__.cpython-310.pyc
+byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/tagger_drone.py to tagger_drone.cpython-310.pyc
+byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/drone_role.py to drone_role.cpython-310.pyc
+byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/center_role.py to center_role.cpython-310.pyc
+running install_data
+creating /root/solution/ros2_ws/install/solution/share/ament_index
+creating /root/solution/ros2_ws/install/solution/share/ament_index/resource_index
+creating /root/solution/ros2_ws/install/solution/share/ament_index/resource_index/packages
+copying resource/solution -> /root/solution/ros2_ws/install/solution/share/ament_index/resource_index/packages
+copying package.xml -> /root/solution/ros2_ws/install/solution/share/solution
+running install_egg_info
+Copying ../../build/solution/solution.egg-info to /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution-0.0.0-py3.10.egg-info
+running install_scripts
+Installing drone_role script to /root/solution/ros2_ws/install/solution/lib/solution
+Installing tagger_drone script to /root/solution/ros2_ws/install/solution/lib/solution
+writing list of installed files to '/root/solution/ros2_ws/build/solution/install.log'

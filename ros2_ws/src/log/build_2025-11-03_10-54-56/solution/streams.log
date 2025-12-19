@@ -1,0 +1,45 @@
+[0.340s] Invoking command in '/root/solution/ros2_ws/src/solution': AMENT_PREFIX_PATH=/root/solution/ros2_ws/install/solution_interfaces:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/root/solution/ros2_ws/install/solution_interfaces:${CMAKE_PREFIX_PATH} LD_LIBRARY_PATH=/root/solution/ros2_ws/install/solution_interfaces/lib:${LD_LIBRARY_PATH} PYTHONPATH=/root/solution/ros2_ws/build/solution/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/root/solution/ros2_ws/install/solution/lib/python3.10/site-packages:/root/solution/ros2_ws/install/solution_interfaces/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/solution build --build-base /root/solution/ros2_ws/build/solution/build install --record /root/solution/ros2_ws/build/solution/install.log --single-version-externally-managed install_data
+[0.455s] running egg_info
+[0.455s] creating ../../build/solution/solution.egg-info
+[0.455s] writing ../../build/solution/solution.egg-info/PKG-INFO
+[0.456s] writing dependency_links to ../../build/solution/solution.egg-info/dependency_links.txt
+[0.456s] writing entry points to ../../build/solution/solution.egg-info/entry_points.txt
+[0.456s] writing requirements to ../../build/solution/solution.egg-info/requires.txt
+[0.456s] writing top-level names to ../../build/solution/solution.egg-info/top_level.txt
+[0.456s] writing manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+[0.457s] reading manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+[0.457s] adding license file 'LICENSE'
+[0.457s] writing manifest file '../../build/solution/solution.egg-info/SOURCES.txt'
+[0.457s] running build
+[0.458s] running build_py
+[0.458s] creating /root/solution/ros2_ws/build/solution/build
+[0.458s] creating /root/solution/ros2_ws/build/solution/build/lib
+[0.458s] creating /root/solution/ros2_ws/build/solution/build/lib/solution
+[0.458s] copying solution/__init__.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+[0.458s] copying solution/tagger_drone.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+[0.458s] copying solution/drone_role.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+[0.458s] copying solution/center_role.py -> /root/solution/ros2_ws/build/solution/build/lib/solution
+[0.458s] running install
+[0.458s] running install_lib
+[0.458s] creating /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+[0.458s] copying /root/solution/ros2_ws/build/solution/build/lib/solution/__init__.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+[0.458s] copying /root/solution/ros2_ws/build/solution/build/lib/solution/tagger_drone.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+[0.458s] copying /root/solution/ros2_ws/build/solution/build/lib/solution/drone_role.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+[0.458s] copying /root/solution/ros2_ws/build/solution/build/lib/solution/center_role.py -> /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution
+[0.459s] byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/__init__.py to __init__.cpython-310.pyc
+[0.459s] byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/tagger_drone.py to tagger_drone.cpython-310.pyc
+[0.460s] byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/drone_role.py to drone_role.cpython-310.pyc
+[0.461s] byte-compiling /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution/center_role.py to center_role.cpython-310.pyc
+[0.461s] running install_data
+[0.461s] creating /root/solution/ros2_ws/install/solution/share/ament_index
+[0.461s] creating /root/solution/ros2_ws/install/solution/share/ament_index/resource_index
+[0.461s] creating /root/solution/ros2_ws/install/solution/share/ament_index/resource_index/packages
+[0.461s] copying resource/solution -> /root/solution/ros2_ws/install/solution/share/ament_index/resource_index/packages
+[0.461s] copying package.xml -> /root/solution/ros2_ws/install/solution/share/solution
+[0.461s] running install_egg_info
+[0.462s] Copying ../../build/solution/solution.egg-info to /root/solution/ros2_ws/install/solution/lib/python3.10/site-packages/solution-0.0.0-py3.10.egg-info
+[0.462s] running install_scripts
+[0.472s] Installing drone_role script to /root/solution/ros2_ws/install/solution/lib/solution
+[0.472s] Installing tagger_drone script to /root/solution/ros2_ws/install/solution/lib/solution
+[0.472s] writing list of installed files to '/root/solution/ros2_ws/build/solution/install.log'
+[0.483s] Invoked command in '/root/solution/ros2_ws/src/solution' returned '0': AMENT_PREFIX_PATH=/root/solution/ros2_ws/install/solution_interfaces:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/root/solution/ros2_ws/install/solution_interfaces:${CMAKE_PREFIX_PATH} LD_LIBRARY_PATH=/root/solution/ros2_ws/install/solution_interfaces/lib:${LD_LIBRARY_PATH} PYTHONPATH=/root/solution/ros2_ws/build/solution/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/root/solution/ros2_ws/install/solution/lib/python3.10/site-packages:/root/solution/ros2_ws/install/solution_interfaces/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/solution build --build-base /root/solution/ros2_ws/build/solution/build install --record /root/solution/ros2_ws/build/solution/install.log --single-version-externally-managed install_data

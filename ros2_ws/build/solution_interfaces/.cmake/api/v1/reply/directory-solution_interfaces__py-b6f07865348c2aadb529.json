@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "solution_interfaces__py",
+		"source" : "/root/solution/ros2_ws/build/solution_interfaces/solution_interfaces__py"
+	}
+}
