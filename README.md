@@ -1,147 +1,103 @@
-## Docker
-Very briefly, Docker is a tool that provides a simple and efficient way to pack everything needed for a specific application in one container. You can also look at it as a lightweight virtual machine running on your computer.
 
-Basic information about Docker and its main concepts can be found [here](https://github.com/larics/docker_files/wiki). Of course, you can also take a look at the [official website](https://www.docker.com/). Don't follow any instructions from these links just yet. They are provided as a general overview and reference you can use in the future. Detailed step-by-step instructions are given below.
+---
 
-#### Prerequisites
-You must have Ubuntu OS installed on your computer. Ideally, this would be Ubuntu 24.04, but another version should work as well. 
+## first_run.sh (root)
 
-#### Step-by-step instructions
-Follow these [instructions](https://docs.docker.com/engine/install/ubuntu/) to install the Docker engine.
+- Purpose: creates and runs the Docker container used for simulation and development (`crazysim_icuas_cont`), mounting the repository and forwarding X11 and the SSH agent. The container includes ROS2, the simulator, and packages in this repo.
+- Typical use:
+  1. Build the Docker image:
+     ```bash
+     docker build --ssh default -t crazysim_icuas_img .
+     ```
+  2. Run the container for the first time (this script creates the container and drops you into an interactive shell inside it):
+     ```bash
+     ./first_run.sh
+     ```
+  3. Re-enter a created container later with:
+     ```bash
+     docker start -i crazysim_icuas_cont
+     # or
+     docker exec -it crazysim_icuas_cont bash
+     ```
 
-Then follow these [optional steps](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user) to manage docker as a non-root user. If you skip this, every `docker` command will have to be executed with `sudo`. Skip the _"Note: To run Docker without root privileges, see Run the Docker daemon as a non-root user (Rootless mode)."_ part. This is just a note and we do not need it.
+Notes:
+- The script prepares an Xauthority file for GUI forwarding and mounts the workspace into the container (`/root/ros2_ws/src/solution/` and `/root/path_planning/`).
+- If you get Xauthority errors, try removing `/tmp/.docker.xauth` or running the script as root.
 
-Docker containers are intended to run inside your terminal. In other words, you won't see a desktop like in regular virtual machines. However, graphical applications can still run in the container if you give them permission. To do that, execute
-```bash
-xhost +local:docker
-```
-To avoid having to do this every time, we can add that command to our `.profile` file which executes on every login.
-```bash
-echo "xhost +local:docker > /dev/null" >> ~/.profile
-```
+### Volume mounts used by `first_run.sh`
 
-If you have an NVIDIA GPU, please install `nvidia-container-toolkit` by following [these instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+`first_run.sh` exposes several host paths into the container so the container can access displays, devices, the SSH agent and the repository. The important mounts are:
 
+- `/tmp/.X11-unix:/tmp/.X11-unix:rw` — X11 socket for GUI forwarding (required if you want to run graphical apps like Gazebo or RViz from inside the container).
+- `/dev:/dev` — exposes host devices (serial, USB) to the container so simulated or real hardware interfaces can be used.
+- `/var/run/dbus/:/var/run/dbus/:z` — DBus socket; useful for desktop integration and some system services.
+- `~/.ssh/ssh_auth_sock:/ssh-agent` and `--env SSH_AUTH_SOCK=/ssh-agent` — forwards your SSH agent into the container so git and SSH operations can use your keys without copying them.
+- `--volume="$REPO_ROOT/solution/:/root/ros2_ws/src/solution/"` — mounts the host `solution/` directory into the container's ROS2 workspace source folder so changes on the host are immediately visible inside the container.
+- `--volume="$REPO_ROOT/path_planning/:/root/path_planning/"` — mounts host `path_planning/` into the container for building/running the planner from inside the container.
 
-## Run Crazyflies in the Docker container
+Why these mounts matter:
+- They allow running GUI tools, using GPU and device hardware, and live-editing code on the host while the container runs ROS and the simulator.
+- Because the repo is mounted, you don't need to rebuild the Docker image to test code changes; edit on the host and run inside the container.
 
-### Setting up
+Troubleshooting and tips:
+- If GUI apps fail to show, ensure you ran `xhost +local:docker` on the host and that `/tmp/.X11-unix` permissions are correct.
+- If SSH agent forwarding doesn't work, check `echo $SSH_AUTH_SOCK` on host and that `~/.ssh/ssh_auth_sock` exists (the script symlinks it).
+- When files created in the container appear owned by root on the host, you can either `chown` them from the host or start the container with a matching UID/GID mapping. For short experiments `sudo` inside the host may be simpler.
+- To change what host folder is mounted into the ROS workspace, edit the `--volume="$REPO_ROOT/…"` lines in `first_run.sh` (for example to mount a different package or mount the whole repo into `/root/ros2_ws/src/`).
 
-Clone the this repository:
-```
-git clone git@github.com:larics/icuas26_competition.git
-```
-Add  to  `~/.bashrc` and source it, or type in the current terminal:
-```
-export DOCKER_BUILDKIT=1
-```
-Run Dockerfile from the project root directory using the following commands:
-```bash
-# Build a Dockerfile
-docker build --ssh default -t crazysim_icuas_img .
+If you'd like, I can also update `first_run.sh` to (optionally) accept environment variables to override these mounts (safer for multi-user systems) — tell me if you want that and I will add it.
 
-# Run the crazysim_img2 container for the fist time
-./first_run.sh
+---
 
-# This will create docker container crazysim_icuas_cont and position you into the container
+## path_planning/
 
-```
+Purpose: generate a tour across all waypoints and provide coordinates for the path follower.
 
-For subsequent use of the container, you can use:
-```bash
-# Start the crazysim_icuas_cont:
-docker start -i crazysim_icuas_cont
+Key files and behavior:
+- `main.cpp` — reads `icuas_waypoints.json`, constructs per-building graphs, generates intra-graph edges, finds inter-graph connecting bridges, runs a solver (Chinese Postman / tour) and writes two artifacts:
+  - `final_path.txt` — ordered waypoint ids for the tour.
+  - `final_path_coordinates.csv` — ordered coordinates (CSV header `x,y,z`) used by the follower node.
+- `graph_solver.hpp/cpp` — supporting solver algorithms.
+- `path_planning_ros.py` — a ROS2 Python node which:
+  - loads `final_path_coordinates.csv` (expects header x,y,z),
+  - connects to Crazyflie services (`Takeoff`, `GoTo`, `Land`),
+  - requests takeoff, sequentially sends waypoints using `/cf_1/go_to`, waits, and finally calls land.
 
-```
+Run example (host or inside container):
+1. Build the planner (CMake):
+   ```bash
+   cd path_planning
+   mkdir -p build && cd build
+   cmake .. && make
+   # binary will be `main` in this build dir
+   ./main
+   ```
+2. Confirm `final_path_coordinates.csv` exists (in the `path_planning` folder). To test follower:
+   - Start simulator (inside container) using `startup/start.sh`.
+   - Run the follower node inside the ROS2 environment (inside container; ensure ROS2 sourced):
+     ```bash
+     python3 ../path_planning/path_planning_ros.py
+     ```
+   The script expects `final_path_coordinates.csv` in its working directory.
 
-The following docker commands can also be helpful:
-```bash
-# Start another bash shell in the already running crazysim_icuas_cont container:
-docker exec -it crazysim_icuas_cont bash
+Notes:
+- The Python follower uses time.sleep between waypoints and service-based synchronous calls — adjust durations in `path_planning_ros.py` to match your simulation timing.
 
-# Stop the container
-docker stop crazysim_icuas_cont
+---
 
-# Delete the container
-docker rm crazysim_icuas_cont
+## solution/
 
-```
+Purpose: mission logic, ROS nodes, and interfaces for multi-agent coordination and role assignment.
 
-If you remove the container, you can always rebuild it from scratch by using `first_run.sh` script. 
+Layout (high-level):
+- `aruco_mission/` — ArUco marker recognition nodes and mission glue.
+- `octomap_map_generator/` — tools to create octomap files from 3D meshes (C++/CMake).
+- `solution/` (Python package) — mission controllers and drone role implementations. Notable files:
+  - `solution/solution/solution/center_role.py` — example controller that assigns the center role to a drone, monitors battery levels, swaps center drone when battery falls below threshold, and issues takeoff/goto/land commands.
+  - `drone_role.py`, `tagger_drone.py` — other role controllers showing typical message/service usage.
+- `solution_interfaces/` — ROS service types used across the system (e.g., `Assign` service).
 
+How to run:
+- The packages are intended to run inside the prepared Docker container. Use `startup/start.sh` to bring up the simulator and typical launch files. The `start.sh` can spawn multiple Crazyflies and the necessary services/topics used by the controllers.
+- Mission controllers subscribe to `/drone_roles` and monitor `/cf_X/battery_status`. They use services like `/{cf}/takeoff`, `/{cf}/go_to`, and `/{cf}/land` to command drones.
 
-The containers `crazysim_icuas_cont` consists of packages for Crazyflies simulator [CrazySim](https://github.com/gtfactslab/CrazySim). General information about Crazyflies can be found [here](https://www.bitcraze.io/products/crazyflie-2-1/).
-
-> [!NOTE]
-> The ros2 workspace is located in /root/CrazySim/ros2_ws
-
-### RUN EMPTY WORLD EXAMPLE
-
-Once inside the container, navigate to `/root/CrazySim/ros2_ws/src/icuas26_competition/startup` (you can use alias `cd_icuas26_competition` that will place you in icuas26_competition package). Start the example: 
-
-```
-./start.sh
-```
-
-If needed, make startup script executable with `chmod +x start.sh`. It starts the example with 5 Crazyflies and 5 aruco markers in an empty world. To test that everything is working, in the first pane of the second window you can start `teleop_twist`, which is already in history. It controls the Crazyflie with id `cf_1`.
-
-### RUN CITY_1 WORLD EXAMPLE
-Once inside the container, navigate to `/root/CrazySim/ros2_ws/src/icuas26_competition/startup`. Edit the `_setup.sh` script to export `ENV_NAME=city_1_world`, then start everything with:
-```
-./start.sh
-```
-> [!NOTE]
-> This will not spawn aruco markers. Place them on your own to test!
-
-#### Interesting topics
-
-* `cf_x/odom` - odometry (can be used for feedback)
-* `cf_x/image` - image from camera (the name of the topic can be changed)
-* `cf_x/battery_status` - percentage of the battery and general state
-
-#### How can crazyflies be controlled:
-* `cf_x/cmd_attitude` - low level controller
-* `cf_x/cmd_hover` - velocities for horizontal hovering, height can be changed by dynamically changing hovering height 
-* `cf_x/start_trajectory`,`cf_x/upload_trajectory` - services for executing trajectories
-* `cf_x/go_to` - service to define point to which cf should go
-* `cf_x/cmd_vel` - horizontal velocity control, vel_mux.py node subscrbes to it and publishes to `cf_x/cmd_hover`
-
-If you are working in the group and you are all using the same network, please check [ROS_DOMAIN_ID](https://docs.ros.org/en/eloquent/Tutorials/Configuring-ROS2-Environment.html#the-ros-domain-id-variable) in `.bashrc` in the container. Random number should be set during the build, however it is possible that some of you got the same number. If that is the situation please change it, so that your simulations do not crash.
-
-## AGV
-The ground vehicle is not shown in the gazebo, however its position is being published on ` AGV/pose `. AGV's pose can be visualized in RVIZ with a marker and subscribing to the topic ` AGV/pose_marker `, which will show small sphere moving around. You can set up its velocity as an environment variable `AGV_VEL` and you can change its traveling path by setting config file with points and the environment variable ` AGV_PATH `. You can see the example in config/AGV_path_empty.yaml
-
-## Creating and working with Octomaps
-If you install `octomap_ros` package, and all its derivatives for ROS, you will be good to go to attempt to convert 3D models into octomaps. We have included a binary that converts an `.stl` file into a `.binvox` file. It is located in `scripts` folder and is called `binvox`. You can use it as follows:
-```bash
-# Convert stl to binvox
-./binvox -e res path_to_stl_file
-
-```
-This will result in a `.binvox` file. As Antun said: `res is resolution in voxels, the larger this number better the resolution. Note that this greatly impacts memory usage and process might not even start. For res=4096 on a 26MB .stl file it used around 65GB of RAM.`. For the current version of the `city_1` Octomap, we used `res` of 1000. See https://github.com/larics/larics_gazebo_worlds for more examples and some troubleshooting guidelines. 
-
-Once you have the `.binvox` file, you can use the tool `binvox2bt` provided by the `octomap` package to convert to binary tree structure that can be loaded by Octomap server:
-```bash
-# Convert stl to binvox
-binvox2bt --bb <minx> <miny> <minz> <maxx> <maxy> <maxz> path_to_file
-
-```
-If you do not want to crop the model, you can omit the bounding box. The command will result in a file with extension `.binvox.bt`, this file can then be loaded in an octomap server ROS node. An example launch file for starting the octomap server node is included in the `launch` folder. 
-
-Once the octomap server node is running, it exposes two services: `/octomap_binary` and `/octomap_full`, which can be used to access the octomap from another ROS node. 
-
-
-## Bonus section
-The provided Docker image comes with a few preinstalled tools and configs which may simplify your life.
-
-**Tmuxinator** is a tool that allows you to start a tmux session with a complex layout and automatically run commands by configuring a simple yaml configuration file. Tmux is a terminal multiplexer - it can run multiple terminal windows inside a single window. This approach is simpler than having to do `docker exec` every time you need a new terminal.
-
-You don't need to write new configuration files for your projects, but some examples will use Tmuxinator. You can move between terminal panes by holding down `Ctrl` key and navigating with arrow keys. Switching between tabs is done with `Shift` and arrow keys. If you have a lot of open panes and tabs in your tmux, you can simply kill everything and exit by pressing `Ctrl+b` and then `k`.
-
-Here are some links: [Tmuxinator](https://github.com/tmuxinator/tmuxinator), [Getting starded with Tmux](https://linuxize.com/post/getting-started-with-tmux/), [Tmux Cheat Sheet](https://tmuxcheatsheet.com/)
-
-**Ranger** is a command-line file browser for Linux. While inside the Docker container, you can run the default file browser `nautilus` with a graphical interface, but it is often easier and quicker to view the files directly in the terminal window. You can start ranger with the command `ra`. Moving up and down the folders is done with arrow keys and you can exit with a `q`. When you exit, the working directory in your terminal will be set to the last directory you opened while in Ranger.
-
-**Htop** is a better version of `top` - command line interface task manager. Start it with the command `htop` and exit with `q`.
-
-**VS Code** - If you normally use VS Code as your IDE, you can install [Dev Containers](https://code.visualstudio.com/docs/remote/containers#_sharing-git-credentials-with-your-container) extension which will allow you to continue using it inside the container. Simply start the container in your terminal (`docker start -i crazysim_icuas_cont `) and then attach to it from the VS code (open action tray with `Ctrl+Shift+P` and select `Dev Containers: Attach to Running Container`).
