@@ -14,7 +14,7 @@ find_package(octomap_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(octomap REQUIRED)
 
-add_executable(waypoint_extractor_node src/waypoint_extractor_node.cpp)
+add_executable(waypoint_extractor_node src/waypoint_extractor_node.cpp src/graph_solver.cpp)
 ament_target_dependencies(waypoint_extractor_node
   rclcpp
   octomap_msgs

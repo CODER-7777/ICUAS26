@@ -45,7 +45,6 @@ docker run -it \
     --net=host \
     --privileged \
     --volume="$REPO_ROOT/solution/:/root/ros2_ws/src/solution/" \
-    --volume="$REPO_ROOT/path_planning/:/root/path_planning/" \
     --gpus '"all","capabilities=compute,utility,graphics"' \
     --name crazysim_icuas_cont \
     crazysim_icuas_img
