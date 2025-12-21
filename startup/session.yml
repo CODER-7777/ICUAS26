@@ -18,7 +18,7 @@ windows:
   - node_start:
       layout: tiled
       panes:
-        - waitForCfsGazebo;sleep 10;ros2 run aruco_mission aruco_mission_node --ros-args -p use_sim_time:=true
+        - waitForCfsGazebo;sleep 10;ros2 run octomap_map_generator waypoint_extractor_node
   - target_found: 
       layout: titled
       panes:
