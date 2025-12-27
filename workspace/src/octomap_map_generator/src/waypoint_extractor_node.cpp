@@ -105,7 +105,7 @@ private:
 
     void runPipeline(double z_target){
         // Define a reference viewpoint for visibility (e.g., drone starting height)
-        octomap::point3d VIEWPOINT(0.0, 0.0, 7.0); 
+        octomap::point3d VIEWPOINT(0.0, 0.0, 10.0); 
         double res = tree_->getResolution();
 
         // ==========================================
