@@ -58,7 +58,13 @@ private:
             tree_.reset(dynamic_cast<octomap::OcTree *>(abstract_tree));
             if (tree_) {
                 RCLCPP_INFO(this->get_logger(), "Map loaded. Res: %f", tree_->getResolution());
-                this->runPipeline();
+                std::vector<double> z_levels = {1.0, 2.0, 3.0};
+
+                for (double z : z_levels) {
+                    RCLCPP_INFO(this->get_logger(), "Processing slice at z = %.2f", z);
+                    runPipeline(z);
+                }
+
             } else {
                 RCLCPP_ERROR(this->get_logger(), "Could not cast to OcTree");
             }
@@ -67,8 +73,8 @@ private:
         }
     }
 
-    void runPipeline() {
-        double z_target = this->get_parameter("z_target").as_double();
+    void runPipeline(double z_target){
+        // double z_target = this->get_parameter("z_target").as_double();
         double res = tree_->getResolution();
 
         // ==========================================
@@ -105,7 +111,7 @@ private:
             minGy = std::min(minGy, p.y); maxGy = std::max(maxGy, p.y);
         }
 
-        const int PADDING = 20; 
+        const int PADDING = 2; 
         const int SCALE = 5; 
         int width = (maxGx - minGx + 1 + 2 * PADDING) * SCALE;
         int height = (maxGy - minGy + 1 + 2 * PADDING) * SCALE;
@@ -145,6 +151,18 @@ private:
         for (const auto& cnt : contours) {
             cluster_id++; 
             
+
+            // 1. Calculate the Centroid of the pillar/building
+            cv::Moments m = cv::moments(cnt);
+            if (m.m00 == 0) continue; // Avoid division by zero
+            double centerX_px = m.m10 / m.m00;
+            double centerY_px = m.m01 / m.m00;
+
+            // Convert Centroid to Metric
+            double centerX_metric = ((centerX_px / SCALE) + offset_x) * res;
+            double centerY_metric = ((centerY_px / SCALE) + offset_y) * res;
+
+
             std::vector<cv::Point> approx;
             // Epsilon 0.04 reduces corner clumping
             cv::approxPolyDP(cnt, approx, 0.04 * cv::arcLength(cnt, true), true);
@@ -157,8 +175,12 @@ private:
             for (const auto& pt : approx) {
                 double mx = ((double)pt.x / SCALE + offset_x) * res;
                 double my = ((double)pt.y / SCALE + offset_y) * res;
+
+                double dy = centerY_metric - my;
+                double dx = centerX_metric - mx;
+                double yaw = std::atan2(dy, dx);
                 
-                all_vertices[global_id] = {mx, my, z_target};
+                all_vertices[global_id] = {mx, my, z_target,yaw};
                 vertex_to_graph_id[global_id] = cluster_id; 
                 all_vertex_ids.insert(global_id);
                 building_node_ids.push_back(global_id);
@@ -246,20 +268,27 @@ private:
         }
 
         // Save Image
-        std::string img_filename = "path_visualization.png";
+        // std::string img_filename = "path_visualization.png";
+        std::string img_filename =
+            "path_visualization_z_" + std::to_string((int)z_target) + ".png";
+
         cv::imwrite(img_filename, vis_img);
         RCLCPP_INFO(this->get_logger(), "Saved visualization to: %s", img_filename.c_str());
 
         // ==========================================
         // 7. Write to CSV
         // ==========================================
-        std::string filename = this->get_parameter("output_csv").as_string();
+        // std::string filename = this->get_parameter("output_csv").as_string();
+        std::string filename =
+              "final_coordinates_cf" + std::to_string((int)z_target) + ".csv";
+
         std::ofstream csv(filename);
         if (csv.is_open()) {
-            csv << "x,y,z\n";
+            csv << "x,y,z,yaw\n";
             for (int id : final_path_ids) {
                 const auto& p = all_vertices.at(id);
-                csv << p.x << "," << p.y << "," << p.z << "\n";
+                // csv << p.x << "," << p.y << "," << p.z << "\n";
+                csv << std::fixed << std::setprecision(4) << p.x << "," << p.y << "," << p.z << "," << p.yaw << "\n";
             }
             csv.close();
             RCLCPP_INFO(this->get_logger(), "Path saved to CSV: %s", filename.c_str());
