@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(octomap_map_generator)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON) #Important if you want code completion IDEs and neovim
+add_compile_options(-fdiagnostics-color=always)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -23,6 +25,7 @@ ament_target_dependencies(waypoint_extractor_node
 
 # 2. Link your external (non-ament) libraries like OpenCV
 target_link_libraries(waypoint_extractor_node
+  octomap
   ${OpenCV_LIBRARIES}
   # You can also link the specific components if ${OpenCV_LIBRARIES} doesn't work
   # OpenCV::opencv_core
