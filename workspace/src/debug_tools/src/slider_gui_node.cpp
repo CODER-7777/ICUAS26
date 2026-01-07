@@ -1,6 +1,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 
+#include <csignal>
+#include <QCoreApplication>
 #include <QApplication>
 #include <QWidget>
 #include <QSlider>
@@ -113,10 +115,16 @@ private:
   std::shared_ptr<BatteryNode> node_;
 };
 
+void sigint_handler(int)
+{
+  QCoreApplication::quit();
+}
+
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
+  std::signal(SIGINT, sigint_handler);
 
   auto node = std::make_shared<BatteryNode>();
 
