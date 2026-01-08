@@ -6,7 +6,7 @@ def generate_launch_description():
 
     # 1. Start the Fleet Manager Node
     manager_node = Node(
-        package='fleet_control',
+        package='mission_coordinator',
         executable='manager_node',
         output='screen'
     )
@@ -15,7 +15,7 @@ def generate_launch_description():
     # 2. Start Battery Nodes for 5 drones (cf_0 to cf_4)
     for i in range(5):
         battery_node = Node(
-            package='fleet_control',
+            package='mission_coordinator',
             executable='battery_node',
             name=f'battery_node_cf_{i}',
             parameters=[{'drone_id': i}],
