@@ -2,3 +2,5 @@ workspace/build/
 workspace/install/
 workspace/log/
 workspace/.cache/
+**.pyc
+**.csv
