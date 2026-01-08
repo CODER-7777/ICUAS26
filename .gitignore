@@ -1,4 +1,4 @@
-**/build/
-**/install/
-**/log/
-**/.cache/
+workspace/build/
+workspace/install/
+workspace/log/
+workspace/.cache/
