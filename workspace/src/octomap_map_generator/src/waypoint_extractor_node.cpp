@@ -5,8 +5,8 @@
 #include <opencv2/opencv.hpp>
 #include <fstream>
 #include <chrono>
+#include <iomanip>
 
-// Include our solver logic
 #include "graph_solver.hpp"
 
 using namespace std::chrono_literals;
@@ -48,6 +48,36 @@ public:
     }
 
 private:
+    // ==========================================
+    // Raycasting Helper Functions
+    // ==========================================
+    bool hasLineOfSight(const Point3D& target,
+                        const octomap::point3d& view,
+                        const std::shared_ptr<octomap::OcTree>& tree)
+    {
+        octomap::point3d end(target.x, target.y, target.z);
+        octomap::point3d direction = (end - view).normalize();
+        double dist = view.distance(end);
+        octomap::point3d hit;
+
+        // false => clear LOS (no hit within distance)
+        return !tree->castRay(view, direction, hit, true, dist);
+    }
+
+    bool edgeHasLineOfSight(const Point3D& a,
+                            const Point3D& b,
+                            const std::shared_ptr<octomap::OcTree>& tree)
+    {
+        octomap::point3d origin(a.x, a.y, a.z);
+        octomap::point3d end(b.x, b.y, b.z);
+
+        octomap::point3d direction = (end - origin).normalize();
+        double dist = origin.distance(end);
+        octomap::point3d hit;
+
+        return !tree->castRay(origin, direction, hit, true, dist);
+    }
+
     rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedPtr client_;
     std::shared_ptr<octomap::OcTree> tree_;
 
@@ -58,7 +88,13 @@ private:
             tree_.reset(dynamic_cast<octomap::OcTree *>(abstract_tree));
             if (tree_) {
                 RCLCPP_INFO(this->get_logger(), "Map loaded. Res: %f", tree_->getResolution());
-                this->runPipeline();
+                std::vector<double> z_levels = {1.0, 2.0, 3.0};
+
+                for (double z : z_levels) {
+                    RCLCPP_INFO(this->get_logger(), "Processing slice at z = %.2f", z);
+                    runPipeline(z);
+                }
+
             } else {
                 RCLCPP_ERROR(this->get_logger(), "Could not cast to OcTree");
             }
@@ -67,8 +103,9 @@ private:
         }
     }
 
-    void runPipeline() {
-        double z_target = this->get_parameter("z_target").as_double();
+    void runPipeline(double z_target){
+        // Define a reference viewpoint for visibility (e.g., drone starting height)
+        octomap::point3d VIEWPOINT(0.0, 0.0, 10.0); 
         double res = tree_->getResolution();
 
         // ==========================================
@@ -105,7 +142,7 @@ private:
             minGy = std::min(minGy, p.y); maxGy = std::max(maxGy, p.y);
         }
 
-        const int PADDING = 20; 
+        const int PADDING = 2; 
         const int SCALE = 5; 
         int width = (maxGx - minGx + 1 + 2 * PADDING) * SCALE;
         int height = (maxGy - minGy + 1 + 2 * PADDING) * SCALE;
@@ -121,15 +158,11 @@ private:
         }
 
         // ==========================================
-        // 3. Extract Building Polygons (FIXED LOGIC)
+        // 3. Extract Building Polygons
         // ==========================================
-        
-        // A. Dilate the WHOLE grid first to merge nearby fragments
         cv::Mat dilated;
-        // Size(41, 41) creates the safety margin around the poles
         cv::dilate(grid, dilated, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(41, 41)));
 
-        // B. Find contours on the merged map
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(dilated, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
@@ -145,31 +178,48 @@ private:
         for (const auto& cnt : contours) {
             cluster_id++; 
             
+            cv::Moments m = cv::moments(cnt);
+            if (m.m00 == 0) continue; 
+            double centerX_px = m.m10 / m.m00;
+            double centerY_px = m.m01 / m.m00;
+
+            double centerX_metric = ((centerX_px / SCALE) + offset_x) * res;
+            double centerY_metric = ((centerY_px / SCALE) + offset_y) * res;
+
             std::vector<cv::Point> approx;
-            // Epsilon 0.04 reduces corner clumping
             cv::approxPolyDP(cnt, approx, 0.04 * cv::arcLength(cnt, true), true);
 
             if (approx.size() < 3) continue;
 
             std::vector<int> building_node_ids;
 
-            // Convert pixels back to metric coords
             for (const auto& pt : approx) {
                 double mx = ((double)pt.x / SCALE + offset_x) * res;
                 double my = ((double)pt.y / SCALE + offset_y) * res;
+                double dy = centerY_metric - my;
+                double dx = centerX_metric - mx;
+                double yaw = std::atan2(dy, dx);
                 
-                all_vertices[global_id] = {mx, my, z_target};
-                vertex_to_graph_id[global_id] = cluster_id; 
-                all_vertex_ids.insert(global_id);
-                building_node_ids.push_back(global_id);
-                global_id++;
+                Point3D candidate{mx, my, z_target, yaw};
+
+                // Added LOS check: only add vertex if visible from Viewpoint
+                if (hasLineOfSight(candidate, VIEWPOINT, tree_)) {
+                    all_vertices[global_id] = candidate;
+                    vertex_to_graph_id[global_id] = cluster_id; 
+                    all_vertex_ids.insert(global_id);
+                    building_node_ids.push_back(global_id);
+                    global_id++;
+                }
             }
 
-            // Add perimeter edges (Intra-Building)
+            // Add perimeter edges (Intra-Building) with LOS check
             for (size_t k = 0; k < building_node_ids.size(); ++k) {
                 int u = building_node_ids[k];
                 int v = building_node_ids[(k + 1) % building_node_ids.size()];
-                intra_edges.push_back({u, v, get_distance(all_vertices[u], all_vertices[v])});
+                
+                if (edgeHasLineOfSight(all_vertices[u], all_vertices[v], tree_)) {
+                    intra_edges.push_back({u, v, get_distance(all_vertices[u], all_vertices[v])});
+                }
             }
         }
 
@@ -188,8 +238,6 @@ private:
         // ==========================================
         // 6. VISUALIZATION
         // ==========================================
-        RCLCPP_INFO(this->get_logger(), "Generating visualization image...");
-        
         cv::Mat vis_img;
         cv::cvtColor(grid, vis_img, cv::COLOR_GRAY2BGR); 
 
@@ -199,72 +247,57 @@ private:
             return cv::Point(px, py);
         };
 
-        // A. Draw Intra-Building Edges (Blue)
         for (const auto& edge : intra_edges) {
             Point3D p1 = all_vertices[edge.u];
             Point3D p2 = all_vertices[edge.v];
             cv::line(vis_img, metricToPixel(p1.x, p1.y), metricToPixel(p2.x, p2.y), cv::Scalar(255, 0, 0), 2);
         }
 
-        // B. Draw Bridges (Green)
         for (const auto& edge : bridges) {
             Point3D p1 = all_vertices[edge.u];
             Point3D p2 = all_vertices[edge.v];
             cv::line(vis_img, metricToPixel(p1.x, p1.y), metricToPixel(p2.x, p2.y), cv::Scalar(0, 255, 0), 2);
         }
 
-        // C. Draw Final Path Trajectory (Red)
         if (!final_path_ids.empty()) {
             for (size_t i = 0; i < final_path_ids.size() - 1; ++i) {
                 Point3D p1 = all_vertices[final_path_ids[i]];
                 Point3D p2 = all_vertices[final_path_ids[i+1]];
-                
-                // Line connecting path points
                 cv::line(vis_img, metricToPixel(p1.x, p1.y), metricToPixel(p2.x, p2.y), cv::Scalar(0, 0, 255), 2);
-                
-                // Draw Vertex dot (Yellow)
                 cv::circle(vis_img, metricToPixel(p1.x, p1.y), 3, cv::Scalar(0, 255, 255), -1); 
             }
-            // Draw Start (Green) and End (Red) Points larger
             Point3D start = all_vertices[final_path_ids[0]];
             Point3D end = all_vertices[final_path_ids.back()];
             cv::circle(vis_img, metricToPixel(start.x, start.y), 6, cv::Scalar(0, 255, 0), -1); 
             cv::circle(vis_img, metricToPixel(end.x, end.y), 6, cv::Scalar(0, 0, 255), -1); 
         }
 
-        // D. Draw Point Order Labels
         if (!final_path_ids.empty()) {
             for (size_t i = 0; i < final_path_ids.size(); ++i) {
                 Point3D p = all_vertices[final_path_ids[i]];
                 cv::Point pix = metricToPixel(p.x, p.y);
                 cv::Point textPos = pix + cv::Point(5, -5);
-
-                // Draw number with a black outline for readability
                 cv::putText(vis_img, std::to_string(i), textPos, cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0,0,0), 2); 
                 cv::putText(vis_img, std::to_string(i), textPos, cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255,255,255), 1); 
             }
         }
 
-        // Save Image
-        std::string img_filename = "path_visualization.png";
+        std::string img_filename = "path_visualization_z_" + std::to_string((int)z_target) + ".png";
         cv::imwrite(img_filename, vis_img);
-        RCLCPP_INFO(this->get_logger(), "Saved visualization to: %s", img_filename.c_str());
 
         // ==========================================
         // 7. Write to CSV
         // ==========================================
-        std::string filename = this->get_parameter("output_csv").as_string();
+        std::string filename = "final_coordinates_cf" + std::to_string((int)z_target) + ".csv";
         std::ofstream csv(filename);
         if (csv.is_open()) {
-            csv << "x,y,z\n";
+            csv << "x,y,z,yaw\n";
             for (int id : final_path_ids) {
                 const auto& p = all_vertices.at(id);
-                csv << p.x << "," << p.y << "," << p.z << "\n";
+                csv << std::fixed << std::setprecision(4) << p.x << "," << p.y << "," << p.z << "," << p.yaw << "\n";
             }
             csv.close();
             RCLCPP_INFO(this->get_logger(), "Path saved to CSV: %s", filename.c_str());
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "Failed to open output file.");
         }
     }
 };

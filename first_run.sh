@@ -46,5 +46,5 @@ docker run -it \
     --privileged \
     --volume="$REPO_ROOT/solution/:/root/ros2_ws/src/solution/" \
     --gpus '"all","capabilities=compute,utility,graphics"' \
-    --name crazysim_icuas_cont \
-    crazysim_icuas_img
+    --name icuasintegration \
+    icuasfinal

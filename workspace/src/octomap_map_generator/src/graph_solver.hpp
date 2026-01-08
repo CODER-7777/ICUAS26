@@ -17,7 +17,7 @@
 #include <octomap/OcTree.h>
 
 struct Point3D { 
-    double x, y, z; 
+    double x, y, z, yaw; 
 };
 
 struct Edge {
