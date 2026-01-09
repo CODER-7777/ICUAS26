@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22)
 project(debug_tools)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-fdiagnostics-color=always)

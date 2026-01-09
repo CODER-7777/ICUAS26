@@ -32,7 +32,10 @@ class FleetManager(Node):
     def __init__(self):
         super().__init__('fleet_manager')
 
-        self.fleet = [Drone(i+1) for i in range(NUM_DRONES)]
+        # -------------------------
+        # Create fleet
+        # -------------------------
+        self.fleet = [Drone(i+1) for i in range(5)]
 
         # Publishers
         self.role_pubs = {
@@ -193,7 +196,15 @@ class FleetManager(Node):
             )
             scouts.extend(scouts1)
             if len(scouts)<2:
-                self.get_logger().error("Cannot restore CENTER–FOLLOW pair")
+                if(len(scouts)==1):
+                    if(center!=None):
+                        scouts[0].role=Role.FOLLOW
+                    elif(follow!=None):
+                        scouts[0].role=Role.CENTER
+                    else:
+                        self.get_logger().error("Cannot restore CENTER–FOLLOW pair")
+                else:
+                    self.get_logger().error("Cannot restore CENTER–FOLLOW pair")
                 return
 
         if(center!=None):
