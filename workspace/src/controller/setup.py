@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'fleet_role_manager = controller.main:main'
         ],
     },
 )

@@ -12,8 +12,8 @@ class FollowerTask:
         node,
         cf_name,
         cancel_event,
-        follow_height=1.5,
-        velocity=0.5
+        follow_height=5.0,
+        velocity=0.05
     ):
         """
         FOLLOW role: continuously tracks /AGV/pose at ~10Hz
@@ -64,10 +64,10 @@ class FollowerTask:
 
         tk_req = Takeoff.Request()
         tk_req.height = self.follow_height
-        tk_req.duration = rclpy.duration.Duration(seconds=3.0).to_msg()
+        tk_req.duration = rclpy.duration.Duration(seconds=10.0).to_msg()
         self.takeoff_cli.call_async(tk_req)
 
-        self._sleep_with_cancel(3.5)
+        self._sleep_with_cancel(11)
 
         # ------------------ FOLLOW LOOP ------------------
         self.node.get_logger().info(

@@ -26,7 +26,7 @@ class Role(IntEnum):
 class Drone:
     def __init__(self, drone_id):
         self.id = drone_id
-        self.batt_percentage = 67.0
+        self.batt_percentage = 68.0
         self.role = Role.UNASSIGNED
         self.has_charged = False
         self.pos = np.zeros(3)

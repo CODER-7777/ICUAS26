@@ -1,13 +1,16 @@
+#!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 import threading
 from enum import IntEnum
 
 from std_msgs.msg import Int32MultiArray
+from geometry_msgs.msg import PoseStamped
 
-from center_role import CenterTask
-from charging_role import ChargingTask
-from follower_role import FollowerTask
+from controller.center_role import CenterTask
+from controller.follower_role import FollowerTask
+from controller.charging_role import ChargingTask
 
 
 # ===================== ROLES =====================
@@ -32,9 +35,12 @@ class FleetRoleManager(Node):
     def __init__(self):
         super().__init__('fleet_role_manager')
 
-        # cf_name → {role, thread, cancel_event}
-        self.active_roles = {}
+        # ------------------ STATE ------------------
+        self.active_roles = {}            # cf_name → {role, thread, cancel_event}
+        self.current_pose = {}            # cf_name → (x, y, z, yaw)
+        self.pose_lock = threading.Lock() # thread safety
 
+        # ------------------ SUBSCRIPTIONS ------------------
         self.role_sub = self.create_subscription(
             Int32MultiArray,
             '/fleet/roles',
@@ -42,11 +48,34 @@ class FleetRoleManager(Node):
             10
         )
 
+        self.pose_subs = {}
+        for i in range(5):  # adjust if needed
+            cf_name = f"cf_{i+1}"
+            self.pose_subs[cf_name] = self.create_subscription(
+                PoseStamped,
+                f'/{cf_name}/pose',
+                lambda msg, name=cf_name: self.pose_callback(msg, name),
+                10
+            )
+
         self.get_logger().info(
-            "FleetRoleManager running (multi-role, multi-thread)"
+            "FleetRoleManager running (per-CF state, multi-threaded)"
         )
 
-    def role_callback(self, msg):
+    # ===================== CALLBACKS =====================
+    def pose_callback(self, msg: PoseStamped, cf_name: str):
+        pos = msg.pose.position
+
+        # yaw ignored for now (0.0); can compute from quaternion later
+        with self.pose_lock:
+            self.current_pose[cf_name] = (
+                pos.x,
+                pos.y,
+                pos.z,
+                0.0
+            )
+
+    def role_callback(self, msg: Int32MultiArray):
         for i, role_val in enumerate(msg.data):
             cf_name = f"cf_{i+1}"
             role = Role(role_val)
@@ -57,7 +86,7 @@ class FleetRoleManager(Node):
 
             self._start_or_update_role(cf_name, role)
 
-    # ===================== CORE =====================
+    # ===================== ROLE CONTROL =====================
     def _start_or_update_role(self, cf_name, role):
         state = self.active_roles.get(cf_name)
 
@@ -65,7 +94,7 @@ class FleetRoleManager(Node):
         if state and state["role"] == role:
             return
 
-        # Stop old role
+        # Stop previous role
         if state:
             self.get_logger().warn(
                 f"[{cf_name}] Role change {state['role'].name} → {role.name}"
@@ -73,14 +102,14 @@ class FleetRoleManager(Node):
             state["cancel_event"].set()
             state["thread"].join()
 
-        if role not in ROLE_TASK_MAP:
+        task_cls = ROLE_TASK_MAP.get(role)
+        if not task_cls:
             self.get_logger().info(
                 f"[{cf_name}] Role {role.name} not implemented"
             )
             return
 
         cancel_event = threading.Event()
-        task_cls = ROLE_TASK_MAP[role]
 
         task = task_cls(
             node=self,
@@ -118,6 +147,7 @@ class FleetRoleManager(Node):
         del self.active_roles[cf_name]
 
 
+# ===================== MAIN =====================
 def main():
     rclpy.init()
     node = FleetRoleManager()

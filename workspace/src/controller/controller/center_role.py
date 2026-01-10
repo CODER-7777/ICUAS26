@@ -11,7 +11,7 @@ class CenterTask:
         cf_name,
         cancel_event,
         target_altitude=5.0,
-        velocity=0.2
+        velocity=0.1
     ):
         self.node = node
         self.cf_name = cf_name
@@ -29,21 +29,28 @@ class CenterTask:
                 f"[{cf_name}] Waiting for go_to service..."
             )
 
-
+    # ===================== TASK =====================
     def execute(self):
         self.node.get_logger().info(
             f"[{self.cf_name}] CENTER mission started"
         )
 
-        # Wait for pose
-        while self.node.current_pose is None and rclpy.ok():
+        # -------- WAIT FOR POSE --------
+        while rclpy.ok():
             if self.cancel_event.is_set():
                 return
+
+            with self.node.pose_lock:
+                pose = self.node.current_pose.get(self.cf_name)
+
+            if pose is not None:
+                break
+
             time.sleep(0.1)
 
-        start_x, start_y, start_z, _ = self.node.current_pose
+        start_x, start_y, start_z, _ = pose
 
-        # ------------------ TAKEOFF ------------------
+        # -------- TAKEOFF --------
         if self._cancelled():
             return
 
@@ -58,7 +65,7 @@ class CenterTask:
             duration_up
         )
 
-        # ------------------ MOVE TO CENTER ------------------
+        # -------- MOVE TO CENTER --------
         if self._cancelled():
             return
 
@@ -81,7 +88,7 @@ class CenterTask:
             f"[{self.cf_name}] CENTER mission completed"
         )
 
-
+    # ===================== HELPERS =====================
     def _send_goto(self, x, y, z, yaw, duration):
         if self._cancelled():
             return
@@ -104,11 +111,10 @@ class CenterTask:
                 return
             time.sleep(0.1)
 
-
     def _cancelled(self):
         if self.cancel_event.is_set():
             self.node.get_logger().warn(
-                f"[{self.cf_name}] Mission cancelled"
+                f"[{self.cf_name}] CENTER mission cancelled"
             )
             return True
         return False

@@ -15,7 +15,7 @@ class ChargingTask:
         cf_name,
         cancel_event,
         hover_z=4.0,
-        velocity=0.3
+        velocity=0.1
     ):
         self.node = node
         self.cf_name = cf_name
