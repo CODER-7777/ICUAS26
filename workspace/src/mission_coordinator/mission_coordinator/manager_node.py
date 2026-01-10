@@ -1,7 +1,9 @@
 import rclpy
+import numpy as np
 from rclpy.node import Node
 from enum import IntEnum
 from sensor_msgs.msg import BatteryState
+from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Int32
 
 # ===================== CONSTANTS =====================
@@ -26,6 +28,11 @@ class Drone:
         self.batt_percentage = 100.0
         self.role = Role.UNASSIGNED
         self.has_charged = False
+        self.pos = np.zeros(3)
+
+def dist(d1:Drone,d2:Drone):
+    return np.sqrt(np.sum(np.square(d1.pos-d2.pos)))
+
 
 # ===================== FLEET MANAGER =====================
 class FleetManager(Node):
@@ -51,6 +58,12 @@ class FleetManager(Node):
                 lambda msg, d=drone: self.battery_callback(msg, d),
                 10
             )
+            self.create_subscription(
+                PoseStamped,
+                f'/cf_{drone.id}/pose',
+                lambda msg, d=drone: self.pose_callback(msg, d),
+                10
+            )
 
         self.assign_initial_roles()
 
@@ -63,6 +76,13 @@ class FleetManager(Node):
     # ===================== CALLBACKS =====================
     def battery_callback(self, msg: BatteryState, drone: Drone):
         drone.batt_percentage = msg.percentage
+
+    def pose_callback(self, msg: PoseStamped, drone: Drone):
+        drone.pos = np.array([
+        msg.pose.position.x,
+        msg.pose.position.y,
+        msg.pose.position.z
+        ])
 
     # ===================== CORE LOGIC =====================
     def manage_fleet(self):
@@ -127,14 +147,14 @@ class FleetManager(Node):
         for role in [Role.CENTER, Role.FOLLOW]:
             active = self.get_drone_by_role(role)
             if active and active.batt_percentage < CRITICAL_BATTERY_THRESH:
-                self.replace_active(active, role)
+                self.replace_active(active)
 
         # 4. Send drones to CHARGE (max 2, only once)
         charging = [d for d in self.fleet if d.role == Role.CHARGE]
         for d in self.fleet:
             if (
                 d.batt_percentage < BATTERY_PERCENTAGE_THRESH
-                and d.role not in [Role.CHARGE, Role.LAND]
+                and d.role==Role.SCOUT
                 and not d.has_charged
                 and len(charging) < MAX_CHARGING
             ):
@@ -144,7 +164,7 @@ class FleetManager(Node):
             
             if(d.batt_percentage < CRITICAL_BATTERY_THRESH 
                 and  len(charging) == MAX_CHARGING
-                and d.role not in [Role.CHARGE, Role.LAND]
+                and d.role==Role.SCOUT
                 and not d.has_charged):
                 d.role=Role.CHARGE
                 charging.append(d)
@@ -155,25 +175,29 @@ class FleetManager(Node):
         self.enforce_center_follow_pair()
 
     # ===================== ROLE MANAGEMENT =====================
-    def replace_active(self, failing: Drone, role: Role):
+    def replace_active(self, failing: Drone):
         candidates = [
             d for d in self.fleet
-            if d.role == Role.SCOUT and d.batt_percentage > CRITICAL_BATTERY_THRESH
+            if (d.role == Role.SCOUT or d.role==failing.role) and d.batt_percentage > CRITICAL_BATTERY_THRESH
         ]
 
         if not candidates:
-            self.get_logger().error(f'NO replacement available for {role.name}\n Mission Finished')
+            self.get_logger().error(f'NO replacement available for {failing.role}\n Mission Finished')
             return
 
         replacement = max(candidates, key=lambda d: d.batt_percentage)
 
         self.get_logger().info(
-            f'SWAP: Drone {replacement.id} replaces {failing.id} as {role.name}'
+            f'SWAP: Drone {replacement.id} with role {replacement.role} replaces {failing.id} as {failing.role}'
         )
 
-        # failing.role = Role.CHARGE if not failing.has_charged else Role.SCOUT
-        failing.role=Role.CHARGE
-        replacement.role = role
+        replacement.role = failing.role
+        if dist(failing, replacement)<1:
+            print("changing role")
+            failing.role=Role.CHARGE
+        else:
+            print(f"replacment {replacement.id}")
+            print("No drones nearby to exchange")
 
     def enforce_center_follow_pair(self):
         center = self.get_drone_by_role(Role.CENTER)
