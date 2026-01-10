@@ -18,6 +18,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(Qt5 REQUIRED COMPONENTS Widgets) 
 
 add_executable(slider_gui_node src/slider_gui_node.cpp)
+add_executable(role_publisher src/role_publisher.cpp)
 
 ament_target_dependencies(slider_gui_node
   rclcpp
@@ -28,7 +29,15 @@ target_link_libraries(slider_gui_node
   Qt5::Widgets
 )
 
-install(TARGETS slider_gui_node
+ament_target_dependencies(role_publisher
+  rclcpp
+  sensor_msgs
+)
+
+target_link_libraries(role_publisher
+  Qt5::Widgets
+)
+install(TARGETS slider_gui_node role_publisher
   DESTINATION lib/${PROJECT_NAME}
 ) 
 
