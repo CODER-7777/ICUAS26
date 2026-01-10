@@ -11,6 +11,7 @@ BATTERY_PERCENTAGE_THRESH = 60.0
 CRITICAL_BATTERY_THRESH = 30.0
 MAX_CHARGING = 2
 NUM_DRONES = 5
+MAX_REPLACE_DIST = 1
 
 # ===================== ROLES =====================
 class Role(IntEnum):
@@ -192,7 +193,7 @@ class FleetManager(Node):
         )
 
         replacement.role = failing.role
-        if dist(failing, replacement)<1:
+        if dist(failing, replacement)<MAX_REPLACE_DIST:
             print("changing role")
             failing.role=Role.CHARGE
         else:
