@@ -4,7 +4,7 @@ from rclpy.node import Node
 from enum import IntEnum
 from sensor_msgs.msg import BatteryState
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32, Int32MultiArray
 
 # ===================== CONSTANTS =====================
 BATTERY_PERCENTAGE_THRESH = 60.0
@@ -26,7 +26,7 @@ class Role(IntEnum):
 class Drone:
     def __init__(self, drone_id):
         self.id = drone_id
-        self.batt_percentage = 100.0
+        self.batt_percentage = 68.0
         self.role = Role.UNASSIGNED
         self.has_charged = False
         self.pos = np.zeros(3)
@@ -46,10 +46,7 @@ class FleetManager(Node):
         self.fleet = [Drone(i+1) for i in range(5)]
 
         # Publishers
-        self.role_pubs = {
-            d.id: self.create_publisher(Int32, f'/cf_{d.id}/role', 10)
-            for d in self.fleet
-        }
+        self.fleet_role_pub = self.create_publisher(Int32MultiArray, '/fleet/roles', 10)
 
         # Subscribers
         for drone in self.fleet:
@@ -253,10 +250,17 @@ class FleetManager(Node):
 
     # ===================== PUBLISHING =====================
     def publish_all_roles(self):
+        msg = Int32MultiArray()
+        
+        
+        role_list = [0] * len(self.fleet)
+        
         for d in self.fleet:
-            msg = Int32()
-            msg.data = int(d.role)
-            self.role_pubs[d.id].publish(msg)
+            # d.id - 1 because your IDs start at 1
+            role_list[d.id - 1] = int(d.role)
+        
+        msg.data = role_list
+        self.fleet_role_pub.publish(msg)
 
     # ===================== STATUS PRINT =====================
     def print_fleet_status(self):
@@ -274,7 +278,7 @@ class FleetManager(Node):
         self.fleet[0].role = Role.CENTER
         self.fleet[1].role = Role.FOLLOW
         for i in range(2, NUM_DRONES):
-            self.fleet[i].role = Role.SCOUT
+            self.fleet[i].role = Role.CHARGE
 
 # ===================== MAIN =====================
 def main():

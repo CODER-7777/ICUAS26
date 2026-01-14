@@ -44,7 +44,7 @@ docker run -it \
     --env SSH_AUTH_SOCK=/ssh-agent \
     --net=host \
     --privileged \
-    --volume="$REPO_ROOT/solution/:/root/ros2_ws/src/solution/" \
+    --volume="$REPO_ROOT/workspace/:/root/workspace/" \
     --gpus '"all","capabilities=compute,utility,graphics"' \
-    --name icuasintegration \
-    icuasfinal
+    --name crazysim_icuas_cont \
+    crazysim_icuas_img

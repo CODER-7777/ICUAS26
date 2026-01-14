@@ -2,5 +2,6 @@
     "cmake.sourceDirectory": "/home/soumya/Documents/Aerial_Robotics/ICUAS/solution_icuas/octomap",
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": []
+    "python-envs.pythonProjects": [],
+    "cmake.ignoreCMakeListsMissing": true
 }
