@@ -13,16 +13,28 @@ find_package(ament_cmake REQUIRED)
 # further dependencies manually.
 find_package(rclcpp REQUIRED)
 find_package(octomap REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(octomap_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
 
 add_executable(bfs src/bfs.cpp)
-ament_target_dependencies(bfs rclcpp octomap octomap_msgs)
+add_executable(occupancy src/occupancy_grid.cpp)
+ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs)
+ament_target_dependencies(occupancy  rclcpp octomap octomap_msgs nav2_msgs)
+
 target_link_libraries(bfs
+  ${OpenCV_LIBRARIES}
+  octomap
+)
+
+target_link_libraries(occupancy
+  ${OpenCV_LIBRARIES}
   octomap
 )
 install(TARGETS
   bfs
+  occupancy
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

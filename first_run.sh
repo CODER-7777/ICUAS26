@@ -47,4 +47,4 @@ docker run -it \
     --volume="$REPO_ROOT/workspace/:/root/workspace/" \
     --gpus '"all","capabilities=compute,utility,graphics"' \
     --name crazysim_icuas_cont \
-    crazysim_icuas_img
+    icuas
