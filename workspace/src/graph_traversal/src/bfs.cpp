@@ -25,7 +25,7 @@ public:
     OctomapBFSPlanner() : Node("octomap_bfs_planner") {
         // Parameters
         this->declare_parameter<double>("z_target", 1.0);
-        this->declare_parameter<double>("inflation_radius", 0.6);
+        this->declare_parameter<double>("inflation_radius", 0.3);
         this->declare_parameter<double>("max_dist", 3.0);
         this->declare_parameter<std::string>("csv_name", "path_log.csv");
         this->declare_parameter<std::string>("frame_id", "world");

@@ -35,7 +35,7 @@ enum class SwarmState { TAKEOFF, MISSION };
 class SwarmPlanner : public rclcpp::Node {
 public:
     SwarmPlanner() : Node("Swarm_planner") {
-        this->declare_parameter<double>("inflation_radius", 0.6); // Reduced slightly for better fit
+        this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
         current_state_ = SwarmState::TAKEOFF;
 
@@ -616,22 +616,77 @@ private:
         }
     }
 
+    geometry_msgs::msg::Point applyRepulsion(
+        geometry_msgs::msg::Point target,
+        geometry_msgs::msg::Point current,
+        const std::map<std::string, geometry_msgs::msg::Point>& all_positions,
+        std::string my_id) 
+    {
+        // TUNING PARAMETERS
+        double safe_radius = 0.7; // Meters (Trigger distance)
+        double gain = 1.2;        // Strength of the push
+        
+        double dx_rep = 0.0;
+        double dy_rep = 0.0;
+        bool avoidance_active = false;
+
+        for (const auto& [other_id, other_pos] : all_positions) {
+            if (other_id == my_id) continue; // Don't repel from self
+
+            double dist = std::hypot(current.x - other_pos.x, current.y - other_pos.y);
+            
+            // Avoid division by zero
+            if (dist < 0.05) dist = 0.05; 
+
+            if (dist < safe_radius) {
+                avoidance_active = true;
+                
+                // Vector FROM other drone TO me (Push Away)
+                double dx = current.x - other_pos.x;
+                double dy = current.y - other_pos.y;
+                
+                // Formula: Strength increases as distance decreases
+                // Normalized Vector (dx/dist) * Magnitude (gain * (safe - dist))
+                double strength = gain * (safe_radius - dist) / dist;
+                
+                dx_rep += dx * strength;
+                dy_rep += dy * strength;
+            }
+        }
+
+        if (avoidance_active) {
+            target.x += dx_rep;
+            target.y += dy_rep;
+        }
+        
+        return target;
+    }
+
     void publishCommands() {
         struct DroneCmd {
             std::string id;
             std::vector<crazyflie_interfaces::msg::Position> waypoints;
         };
         std::vector<DroneCmd> batch_buffer;
+        
+        // NEW: We need a snapshot of where everyone is RIGHT NOW
+        std::map<std::string, geometry_msgs::msg::Point> current_positions;
 
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (current_state_ != SwarmState::MISSION) return;
 
+            // Snapshot Commands
             batch_buffer.reserve(active_commands_.size());
             for (const auto& kv : active_commands_) {
                 if (!kv.second.empty()) {
                     batch_buffer.push_back({kv.first, kv.second});
                 }
+            }
+            
+            // Snapshot Positions (for collision checks)
+            for(const auto& kv : swarm_poses_) {
+                current_positions[kv.first] = kv.second.pose.position;
             }
         } 
 
@@ -640,9 +695,35 @@ private:
             const auto& item = batch_buffer[i];
             
             auto pub_it = cmd_pubs_.find(item.id);
-            if (pub_it != cmd_pubs_.end() && !item.waypoints.empty()) {
+            
+            // Only proceed if we have a publisher and a current position for this drone
+            if (pub_it != cmd_pubs_.end() && !item.waypoints.empty() && current_positions.count(item.id)) {
+                
+                // 1. Pick the Next Waypoint
                 size_t target_idx = (item.waypoints.size() > 1) ? 1 : 0;
-                pub_it->second->publish(item.waypoints[target_idx]);
+                auto next_wp = item.waypoints[target_idx];
+                
+                // Convert to Point for calculation
+                geometry_msgs::msg::Point target_pt;
+                target_pt.x = next_wp.x;
+                target_pt.y = next_wp.y;
+                target_pt.z = next_wp.z; // Repulsion usually purely horizontal (XY)
+
+                // 2. APPLY REPULSION
+                // Nudge the target point away from neighbors
+                geometry_msgs::msg::Point adjusted_pt = applyRepulsion(
+                    target_pt, 
+                    current_positions[item.id], 
+                    current_positions, 
+                    item.id
+                );
+
+                // 3. Publish the Adjusted Command
+                crazyflie_interfaces::msg::Position safe_cmd = next_wp; // Copy yaw/z
+                safe_cmd.x = adjusted_pt.x;
+                safe_cmd.y = adjusted_pt.y;
+                
+                pub_it->second->publish(safe_cmd);
             }
         }
     }
