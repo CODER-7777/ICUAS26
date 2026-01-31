@@ -117,7 +117,7 @@ private:
     void publishPoseArray(const std::vector<geometry_msgs::msg::Point>& path) {
         geometry_msgs::msg::PoseArray array_msg;
         array_msg.header.stamp = this->now();
-        array_msg.header.frame_id = this->get_parameter("frame_id").as_string();
+        array_msg.header.frame_id = "world";
 
         for (const auto& pt : path) {
             geometry_msgs::msg::Pose p;
