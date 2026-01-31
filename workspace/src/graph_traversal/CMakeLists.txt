@@ -16,12 +16,19 @@ find_package(octomap REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(octomap_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 add_executable(bfs src/bfs.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
-ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs)
+add_executable(move src/move.cpp)
+add_executable(prediction src/prediction.cpp)
+
+ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs visualization_msgs)
 ament_target_dependencies(occupancy  rclcpp octomap octomap_msgs nav2_msgs)
+ament_target_dependencies(move  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
+ament_target_dependencies(prediction  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
 
 target_link_libraries(bfs
   ${OpenCV_LIBRARIES}
@@ -32,9 +39,25 @@ target_link_libraries(occupancy
   ${OpenCV_LIBRARIES}
   octomap
 )
+
+find_package(OpenMP REQUIRED)
+
+target_link_libraries(move
+  ${OpenCV_LIBRARIES}
+  octomap
+  OpenMP::OpenMP_CXX
+)
+
+target_link_libraries(prediction
+  ${OpenCV_LIBRARIES}
+  octomap
+)
+
 install(TARGETS
   bfs
   occupancy
+  move
+  prediction
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
