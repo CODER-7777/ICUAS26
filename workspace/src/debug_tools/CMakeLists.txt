@@ -16,7 +16,10 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(Qt5 REQUIRED COMPONENTS Widgets) 
-find_package(octomap_msgs REQUIRED) 
+find_package(octomap_msgs REQUIRED)
+find_package(octomap_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(nav_msgs REQUIRED) 
 
 add_executable(slider_gui_node src/slider_gui_node.cpp)
 add_executable(role_publisher src/role_publisher.cpp)
@@ -44,7 +47,15 @@ ament_target_dependencies(octomap_binary_publisher
   rclcpp
   octomap_msgs
 )
-install(TARGETS slider_gui_node role_publisher octomap_binary_publisher
+
+add_executable(grid_visualizer src/grid_visualizer.cpp)
+ament_target_dependencies(grid_visualizer
+  rclcpp
+  nav_msgs
+  visualization_msgs
+)
+
+install(TARGETS slider_gui_node role_publisher octomap_binary_publisher grid_visualizer
   DESTINATION lib/${PROJECT_NAME}
 ) 
 
