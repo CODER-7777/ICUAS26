@@ -22,6 +22,7 @@ public:
                             2.0); // Max dist for reward calculation
     this->declare_parameter("flatten_strength",
                             0.1); // How much to flatten per visit
+    this->declare_parameter("flatten_sigma", 0.5);     // Spread of flattening
     this->declare_parameter("los_penalty_decay", 0.5); // Fast decay for LOS
     this->declare_parameter("grid_z_min", 0.5);        // Height slice min
     this->declare_parameter("grid_z_max", 1.5);        // Height slice max
@@ -141,7 +142,8 @@ private:
     // occupied node within max_dist.
 
     double max_dist = this->get_parameter("obstacle_distance_max").as_double();
-    double sigma = this->get_parameter("reward_sigma").as_double();
+    // double sigma = this->get_parameter("reward_sigma").as_double();
+    double sigma = 1.3;
     double z_min = this->get_parameter("grid_z_min").as_double();
     double z_max = this->get_parameter("grid_z_max").as_double();
 
@@ -218,7 +220,7 @@ private:
               // to edge? User says "fixed distance from the edges". Let's
               // assume user wants a safe buffer. Gaussian: R = exp( - (d -
               // d_opt)^2 / (2*sigma^2) )
-              double d_opt = 1.0; // Optimal distance from obstacle
+              double d_opt = 3.0; // Optimal distance from obstacle
 
               double reward =
                   std::exp(-std::pow(dist - d_opt, 2) / (2 * sigma * sigma));
@@ -253,22 +255,50 @@ private:
       return;
 
     double flatten = this->get_parameter("flatten_strength").as_double();
+    double flatten_sigma = this->get_parameter("flatten_sigma").as_double();
 
     // 1. Update Long Term Grid (Flattening) - for ALL drones
     for (int i = 0; i < 5; ++i) {
       if (!has_pose_[i])
         continue;
 
-      int px = std::floor((drone_poses_[i].pose.position.x - grid_origin_x_) /
-                          grid_res_);
-      int py = std::floor((drone_poses_[i].pose.position.y - grid_origin_y_) /
-                          grid_res_);
+      double drone_x = drone_poses_[i].pose.position.x;
+      double drone_y = drone_poses_[i].pose.position.y;
 
-      if (px >= 0 && px < grid_width_ && py >= 0 && py < grid_height_) {
-        // Flatten reward here: reduce it
-        float &val = long_term_grid_[py * grid_width_ + px];
-        if (val > 0) {
-          val = std::max(0.0f, val - (float)flatten);
+      // Determine range to check (3 * sigma is enough for Gaussian)
+      double range = 3.0 * flatten_sigma;
+      int range_cells = std::ceil(range / grid_res_);
+
+      // Current grid position of the drone
+      int cx = std::floor((drone_x - grid_origin_x_) / grid_res_);
+      int cy = std::floor((drone_y - grid_origin_y_) / grid_res_);
+
+      // Looping over cells which are in the range of the drone
+      for (int dy = -range_cells; dy <= range_cells; ++dy) {
+        for (int dx = -range_cells; dx <= range_cells; ++dx) {
+          int nx = cx + dx;
+          int ny = cy + dy;
+
+          if (nx >= 0 && nx < grid_width_ && ny >= 0 && ny < grid_height_) {
+            // Calculate real distance
+            double cell_x = grid_origin_x_ + (nx + 0.5) * grid_res_;
+            double cell_y = grid_origin_y_ + (ny + 0.5) * grid_res_;
+            double dist_sq =
+                std::pow(cell_x - drone_x, 2) + std::pow(cell_y - drone_y, 2);
+
+            // Gaussian falloff
+            double weight =
+                std::exp(-dist_sq / (2.0 * flatten_sigma * flatten_sigma));
+
+            // Multiplicative decay
+            float &val = long_term_grid_[ny * grid_width_ + nx];
+            if (val > 0) {
+              // flatten serves as decay rate scale (0..1)
+              // If weight is 1 and flatten is 0.1, we multiply by 0.9
+              double decay_factor = std::max(0.0, 1.0 - (flatten * weight));
+              val *= (float)decay_factor;
+            }
+          }
         }
       }
     }
@@ -278,7 +308,7 @@ private:
     // "more and more negative as we move away from end of LOS"
     // Let's assume -50.0 is base occlusion penalty, and we add more penalty for
     // depth. Or just start with -100 (Deeply occluded).
-    std::fill(temp_grid_.begin(), temp_grid_.end(), -50.0f);
+    std::fill(temp_grid_.begin(), temp_grid_.end(), 0.0f);
 
     // For optimization, we can iterate drones then pixels, or pixels then
     // drones. Since we want max(drone1, drone2...), iterating pixels then
@@ -308,9 +338,9 @@ private:
         // visible "on the ground" or "at flight altitude"? Usually "Map
         // visibility". Let's assume visibility of the *cell center* at *grid
         // slice height*. Or better: visibility of the cell at *drone's* height?
-        // Let's use a fixed height for the target cell, e.g., 1.0m (center of
+        // Let's use a fixed height for the target cell, e.g., 3.0m (center of
         // interest).
-        double target_z = 1.0;
+        double target_z = 3.0;
         octomap::point3d end(wx, wy, target_z);
 
         float max_local_val = -1000.0f; // Very negative start
@@ -323,22 +353,24 @@ private:
 
           octomap::point3d origin(drone_poses_[i].pose.position.x,
                                   drone_poses_[i].pose.position.y,
-                                  drone_poses_[i].pose.position.z);
+                                  3.0
+                                  // drone_poses_[i].pose.position.z
+                                  );
 
           octomap::point3d ray_end;
-          // max range 10m
-          bool hit =
-              octree_->castRay(origin, end - origin, ray_end, true, 10.0);
+          // max range 3m
+          bool hit = octree_->castRay(origin, end - origin, ray_end, true, 3.0);
 
           double dist_to_cell = (end - origin).norm();
           double dist_to_hit = (ray_end - origin).norm();
 
           float val;
-          if (!hit || dist_to_hit >= dist_to_cell) {
-            val = 0.0f; // Visible
+          if ((!hit && dist_to_cell<=3.0) || dist_to_hit >= dist_to_cell) {
+            val = 20.0f; // Visible: Base value to distinguish from unknown
           } else {
-            double depth = dist_to_cell - dist_to_hit;
-            val = -10.0f * (float)depth; // Occluded
+            double depth = dist_to_cell - 3.0;
+            val = 20.0f * std::exp(-std::pow(depth, 2) / (2 * 1.1 * 1.1));
+            // val = -10.0f * (float)depth; // Occluded
           }
           if (val > max_local_val)
             max_local_val = val;
@@ -356,7 +388,7 @@ private:
     // 3. Combine and Publish
     auto msg = nav_msgs::msg::OccupancyGrid();
     msg.header.stamp = this->now();
-    msg.header.frame_id = "map";
+    msg.header.frame_id = "world";
     msg.info.resolution = grid_res_;
     msg.info.width = grid_width_;
     msg.info.height = grid_height_;

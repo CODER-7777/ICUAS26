@@ -64,19 +64,29 @@ def main(args=None):
                 
                 grid_2d = data.reshape((height, width))
                 
+                # Calculate dynamic range for visualization
+                min_val = np.min(grid_2d)
+                max_val = np.max(grid_2d)
+                
+                # If all values are the same, use a default range to avoid errors
+                if min_val == max_val:
+                    min_val -= 1
+                    max_val += 1
+
                 extent = [origin_x, origin_x + width * res, 
                           origin_y, origin_y + height * res]
                 
                 if img is None:
                     img = ax.imshow(grid_2d, cmap='RdYlGn', origin='lower', 
-                                    extent=extent, vmin=0, vmax=100)
-                    plt.colorbar(img, ax=ax, label='Reward')
+                                    extent=extent, vmin=min_val, vmax=max_val)
+                    colorbar = plt.colorbar(img, ax=ax, label='Reward')
                     ax.set_title("Reward Grid with Drones")
                     ax.set_xlabel("X [m]")
                     ax.set_ylabel("Y [m]")
                 else:
                     img.set_data(grid_2d)
                     img.set_extent(extent)
+                    img.set_clim(vmin=min_val, vmax=max_val)
             
             # Update drone markers (always update if they exist)
             if node.drone_poses:
