@@ -366,10 +366,10 @@ private:
 
           float val;
           if ((!hit && dist_to_cell<=3.0) || dist_to_hit >= dist_to_cell) {
-            val = 20.0f; // Visible: Base value to distinguish from unknown
+            val = 40.0f; // Visible: Base value to distinguish from unknown
           } else {
             double depth = dist_to_cell - 3.0;
-            val = 20.0f * std::exp(-std::pow(depth, 2) / (2 * 1.1 * 1.1));
+            val = 40.0f * std::exp(-std::pow(depth, 2) / (2 * 1.1 * 1.1));
             // val = -10.0f * (float)depth; // Occluded
           }
           if (val > max_local_val)
