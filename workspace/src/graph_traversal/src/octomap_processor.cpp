@@ -142,6 +142,7 @@ private:
     // occupied node within max_dist.
 
     double max_dist = this->get_parameter("obstacle_distance_max").as_double();
+    // double max_dist = 4.0;
     // double sigma = this->get_parameter("reward_sigma").as_double();
     double sigma = 1.3;
     double z_min = this->get_parameter("grid_z_min").as_double();
@@ -222,22 +223,59 @@ private:
               // d_opt)^2 / (2*sigma^2) )
               double d_opt = 3.0; // Optimal distance from obstacle
 
-              double reward =
-                  std::exp(-std::pow(dist - d_opt, 2) / (2 * sigma * sigma));
+              double reward = 40.0f * std::exp(-std::pow(dist - d_opt, 2) / (2 * sigma * sigma));
 
+              // reward-=1000*std::exp(-std::pow(dist, 2) / (2 * .1 * .1));
               // Additive or Max? Usually fields are additive or max.
               // Taking MAX to avoid accumulation artifacts.
               long_term_grid_[ny * grid_width_ + nx] =
                   std::max(long_term_grid_[ny * grid_width_ + nx],
-                           (float)reward * 100.0f);
+                           (float)reward );
             }
           }
         }
 
         // Mark obstacle itself as negative
         if (cx >= 0 && cx < grid_width_ && cy >= 0 && cy < grid_height_) {
-          long_term_grid_[cy * grid_width_ + cx] = -100.0f;
+          long_term_grid_[cy * grid_width_ + cx] = -1000.0f;
         }
+      }
+    }
+
+/**
+  Iterate leaves and splat gaussian as some pixels are over written while adding reward
+  and sometimes the reward even overcomes obstacles which we cannot allow
+**/
+    for (auto it = octree_->begin_leafs(), end = octree_->end_leafs();
+         it != end; ++it) {
+      if (octree_->isNodeOccupied(*it)) {
+      double ox = it.getX();
+      double oy = it.getY();
+      double oz = it.getZ();
+
+      if (oz < z_min || oz > z_max)
+        continue;
+
+      // Effect range in grid cells
+      int range_cells = std::ceil(max_dist / grid_res_);
+
+      int cx = std::floor((ox - grid_origin_x_) / grid_res_);
+      int cy = std::floor((oy - grid_origin_y_) / grid_res_);
+
+      for (int dy = -range_cells; dy <= range_cells; ++dy) {
+        for (int dx = -range_cells; dx <= range_cells; ++dx) {
+          int nx = cx + dx;
+          int ny = cy + dy;
+          if (nx >= 0 && nx < grid_width_ && ny >= 0 && ny < grid_height_) {
+            double dist = std::sqrt(dx * dx + dy * dy) * grid_res_;
+            if (dist > max_dist)
+              continue;
+            double penalty=-100*std::exp(-std::pow(dist, 2) / (2 * .15 * .15));
+
+            long_term_grid_[ny * grid_width_ + nx] += (float) penalty;
+        }
+      }
+       }
       }
     }
   }
@@ -366,10 +404,10 @@ private:
 
           float val;
           if ((!hit && dist_to_cell<=3.0) || dist_to_hit >= dist_to_cell) {
-            val = 40.0f; // Visible: Base value to distinguish from unknown
+            val = 30.0f; // Visible: Base value to distinguish from unknown
           } else {
             double depth = dist_to_cell - 3.0;
-            val = 40.0f * std::exp(-std::pow(depth, 2) / (2 * 1.1 * 1.1));
+            val = 30.0f * std::exp(-std::pow(depth, 2) / (2 * 1 * 1));
             // val = -10.0f * (float)depth; // Occluded
           }
           if (val > max_local_val)
