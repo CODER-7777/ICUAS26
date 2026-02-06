@@ -20,8 +20,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(octomap REQUIRED)
 find_package(octomap_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
- 
-
 add_executable(slider_gui_node src/slider_gui_node.cpp)
 add_executable(role_publisher src/role_publisher.cpp)
 add_executable(connectivity_checker src/connectivity_checker.cpp)
@@ -55,7 +53,8 @@ ament_target_dependencies(connectivity_checker
 target_link_libraries(connectivity_checker
   octomap
 )
-install(TARGETS slider_gui_node role_publisher connectivity_checker
+
+install(TARGETS slider_gui_node role_publisher octomap_binary_publisher grid_visualizer connectivity_checker
   DESTINATION lib/${PROJECT_NAME}
 ) 
 

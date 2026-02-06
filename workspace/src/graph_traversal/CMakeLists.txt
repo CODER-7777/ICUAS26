@@ -13,8 +13,11 @@ find_package(ament_cmake REQUIRED)
 # further dependencies manually.
 find_package(rclcpp REQUIRED)
 find_package(octomap REQUIRED)
+find_package(octomap_ros REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(octomap_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
 
@@ -35,6 +38,26 @@ target_link_libraries(occupancy
 install(TARGETS
   bfs
   occupancy
+  DESTINATION lib/${PROJECT_NAME})
+
+add_executable(octomap_processor src/octomap_processor.cpp)
+target_link_libraries(octomap_processor
+  ${OpenCV_LIBRARIES}
+  octomap
+)
+ament_target_dependencies(octomap_processor
+  rclcpp
+  octomap
+  octomap_msgs
+  octomap_ros
+  nav_msgs
+  geometry_msgs
+)
+
+install(TARGETS
+  bfs
+  occupancy
+  octomap_processor
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
