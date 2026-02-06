@@ -260,7 +260,9 @@ private:
             for (size_t j = grid_path.size() - 1; j > path_idx; --j) {
                 auto p_start = gToW(grid_path[path_idx].i, grid_path[path_idx].j);
                 auto p_check = gToW(grid_path[j].i, grid_path[j].j);
-                if (std::hypot(p_start.x - p_check.x, p_start.y - p_check.y) <= maxD && hasLineOfSight(p_start, p_check, cached_grid_)) {
+                // Use 2D horizontal distance for drone-to-drone waypoint spacing (same altitude)
+                double horiz_dist = std::hypot(p_start.x - p_check.x, p_start.y - p_check.y);
+                if (horiz_dist <= maxD && hasLineOfSight(p_start, p_check, cached_grid_)) {
                     drone_pts.push_back(p_check);
                     path_idx = j;
                     found_jump = true;

@@ -68,6 +68,23 @@ public:
                 "/" + id + "/cmd_position", 10);
         }
 
+        // AGV Pose Subscription for loop detection - DISABLED FOR NOW
+        /*
+        agv_sub_ = this->create_subscription<geometry_msgs::msg::Point>(
+            "/AGV/pose", 10,
+            [this](const geometry_msgs::msg::Point::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(data_mutex_);
+                agv_current_pos_ = *msg;
+                
+                // Capture starting position once
+                if (!agv_start_captured_) {
+                    agv_start_pos_ = *msg;
+                    agv_start_captured_ = true;
+                    RCLCPP_INFO(this->get_logger(), "AGV start position captured: (%.2f, %.2f)", msg->x, msg->y);
+                }
+            }, sub_opt);
+        */
+
         // 3. Clients
         octomap_client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary", 
             rmw_qos_profile_services_default, callback_group_);
@@ -103,12 +120,36 @@ private:
     bool hasPoints_ = false;
     bool map_ready_ = false;
 
+    // Height boost after AGV loop completion
+    const double HEIGHT_BOOST = 1.0;        // 1 meter increase per loop
+    const double LOOP_DETECTION_RADIUS = 1.0; // meters - threshold to detect AGV returning to start
+    int agv_loop_count_ = 0;
+    geometry_msgs::msg::Point agv_start_pos_;
+    geometry_msgs::msg::Point agv_current_pos_;
+    bool agv_start_captured_ = false;
+    bool agv_away_from_start_ = false;  // Must move away before loop can be counted
+    rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
+
     std::vector<std::string> droneIds_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> drone_subs_;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr dronePos_sub_;
     std::map<std::string, geometry_msgs::msg::PoseStamped> swarm_poses_;
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
+
+    // --- DISTANCE HELPER FUNCTIONS ---
+    // 2D horizontal distance (for drone-to-drone, same altitude)
+    double dist2D(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
+        return std::hypot(a.x - b.x, a.y - b.y);
+    }
+    
+    // 3D Euclidean distance (for drone-to-AGV/base, different altitudes)
+    double dist3D(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
+        double dx = a.x - b.x;
+        double dy = a.y - b.y;
+        double dz = a.z - b.z;
+        return std::sqrt(dx*dx + dy*dy + dz*dz);
+    }
 
     // --- OCTOMAP & GRID UTILS ---
 
@@ -435,6 +476,37 @@ private:
     }
 
     void handleMission() {
+        // AGV Loop Detection - DISABLED FOR NOW
+        /*
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            if (agv_start_captured_) {
+                double dist_to_start = std::hypot(
+                    agv_current_pos_.x - agv_start_pos_.x,
+                    agv_current_pos_.y - agv_start_pos_.y
+                );
+                
+                // Must move away first (at least 3m from start)
+                if (!agv_away_from_start_ && dist_to_start > 3.0) {
+                    agv_away_from_start_ = true;
+                    RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
+                }
+                
+                // Detect loop completion - AGV returned to start
+                if (agv_away_from_start_ && dist_to_start < LOOP_DETECTION_RADIUS) {
+                    agv_loop_count_++;
+                    agv_away_from_start_ = false;  // Reset for next loop
+                    
+                    double current_z = this->get_parameter("z_target").as_double();
+                    this->set_parameter(rclcpp::Parameter("z_target", current_z + HEIGHT_BOOST));
+                    RCLCPP_INFO(this->get_logger(), 
+                        "🔄 AGV Loop %d completed! Raising altitude to %.1f m", 
+                        agv_loop_count_, current_z + HEIGHT_BOOST);
+                }
+            }
+        }
+        */
+
         nav_msgs::msg::OccupancyGrid local_grid;
         geometry_msgs::msg::PoseArray local_targets;
         std::map<std::string, geometry_msgs::msg::PoseStamped> local_poses;
@@ -458,7 +530,8 @@ private:
             for (size_t j = 0; j < num_targets; ++j) {
                 auto& d_pos = local_poses[droneIds_[i]].pose.position;
                 auto& t_pos = local_targets.poses[j].position;
-                double dist = std::hypot(d_pos.x - t_pos.x, d_pos.y - t_pos.y);
+                // Use 3D distance for drone-to-target (different altitudes)
+                double dist = dist3D(d_pos, t_pos);
                 costs[i][j] = dist;
                 all_distances.push_back(dist);
             }
@@ -541,7 +614,8 @@ private:
                 double min_dist = 1e9;
 
                 for (size_t k = 0; k < anchors.size(); ++k) {
-                    double d = std::hypot(current_pos.x - anchors[k].x, current_pos.y - anchors[k].y);
+                    // Use 3D distance for drone-to-anchor (base/AGV at different altitude)
+                    double d = dist3D(current_pos, anchors[k]);
                     if (d < min_dist) {
                         min_dist = d;
                         best_anchor_idx = k;
@@ -633,6 +707,7 @@ private:
         for (const auto& [other_id, other_pos] : all_positions) {
             if (other_id == my_id) continue; // Don't repel from self
 
+            // Use 2D horizontal distance for drone-to-drone (same altitude)
             double dist = std::hypot(current.x - other_pos.x, current.y - other_pos.y);
             
             // Avoid division by zero
