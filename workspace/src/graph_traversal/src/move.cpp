@@ -19,9 +19,20 @@
 #include <unordered_set>
 #include <omp.h>
 
+#include <sensor_msgs/msg/battery_state.hpp>
+#include <crazyflie_interfaces/srv/land.hpp>
+
 using namespace std::chrono_literals;
 
 struct idx { int i, j; };
+
+struct DroneBatteryState {
+    float percentage = 100.0f;
+    bool has_charged = false;     // Can only charge once
+    bool is_charging = false;     // Currently on ground charging
+    bool is_going_to_charge = false; // En route to charging area
+    int assigned_slot = -1;       // -1: None, 0..N: Slot Index
+};
 
 // Node for A* Priority Queue
 struct AStarNode {
@@ -69,7 +80,7 @@ public:
         }
 
         // AGV Pose Subscription for loop detection - DISABLED FOR NOW
-        /*
+        
         agv_sub_ = this->create_subscription<geometry_msgs::msg::Point>(
             "/AGV/pose", 10,
             [this](const geometry_msgs::msg::Point::SharedPtr msg) {
@@ -83,7 +94,7 @@ public:
                     RCLCPP_INFO(this->get_logger(), "AGV start position captured: (%.2f, %.2f)", msg->x, msg->y);
                 }
             }, sub_opt);
-        */
+        
 
         // 3. Clients
         octomap_client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary", 
@@ -101,6 +112,8 @@ public:
         
         // Control Loop (Publishing commands fast)
         control_timer_ = this->create_wall_timer(50ms, std::bind(&SwarmPlanner::publishCommands, this), callback_group_);
+        
+        initializeBMS();
     }
 
 private:
@@ -136,6 +149,78 @@ private:
     std::map<std::string, geometry_msgs::msg::PoseStamped> swarm_poses_;
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
+
+    // --- BMS Members ---
+    std::map<std::string, DroneBatteryState> battery_states_;
+    std::vector<rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr> battery_subs_;
+    std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Land>::SharedPtr> land_clients_;
+    
+    geometry_msgs::msg::Point charging_station_coords_;
+    const float CHARGING_THRESHOLD = 85.0f; // Updated per user desire/code snapshot
+    const float CHARGED_THRESHOLD = 88.0f;
+
+    // --- Charging Slots & Concurrency ---
+    std::vector<geometry_msgs::msg::Point> charging_slots_;
+    std::vector<bool> slot_occupied_;
+    const int MAX_CHARGING_DRONES = 2; // User limit
+
+    void initializeBMS() {
+        // 1. Load Charging Area Parameters
+        this->declare_parameter("charging_area.upper_left", std::vector<double>{-1.0, 1.0});
+        this->declare_parameter("charging_area.down_right", std::vector<double>{1.0, -1.0});
+        
+        std::vector<double> ul = this->get_parameter("charging_area.upper_left").as_double_array();
+        std::vector<double> dr = this->get_parameter("charging_area.down_right").as_double_array();
+        
+        // Compute Center
+        double cx = 0.0, cy = 0.0;
+        if (ul.size() >= 2 && dr.size() >= 2) {
+            cx = (ul[0] + dr[0]) / 2.0;
+            cy = (ul[1] + dr[1]) / 2.0;
+            charging_station_coords_.x = cx;
+            charging_station_coords_.y = cy;
+            charging_station_coords_.z = 0.0;
+        } else {
+             RCLCPP_ERROR(this->get_logger(), "Invalid charging area parameters! Defaulting to 0,0");
+        }
+
+        // Initialize Slots (Diagonally opposite corners for max separation)
+        // Offset slightly inward from corners to stay within bounds? 
+        // Or just use the corners if safe. defined as [-1,1] to [1,-1].
+        // Let's go 0.5m inward from corners to be safe, or just fixed offsets from center if area is large enough.
+        // Given area is likely large enough, let's use fixed offsets from center to ensure >1.4m separation.
+        // Slot 0: Center + (-0.8, -0.8)
+        // Slot 1: Center + (0.8, 0.8)
+        // Distance ~ 2.2m > 1.4m required.
+        
+        geometry_msgs::msg::Point s0; s0.x = cx - 0.8; s0.y = cy - 0.8; s0.z = 0.0;
+        geometry_msgs::msg::Point s1; s1.x = cx + 0.8; s1.y = cy + 0.8; s1.z = 0.0;
+        
+        charging_slots_.push_back(s0);
+        charging_slots_.push_back(s1);
+        slot_occupied_.resize(2, false);
+
+        // 2. Subscribe and Create Clients
+        auto sub_opt = rclcpp::SubscriptionOptions();
+        sub_opt.callback_group = callback_group_;
+
+        for (const std::string& id : droneIds_) {
+            // Init State
+            battery_states_[id] = DroneBatteryState();
+
+            // Battery Sub
+            battery_subs_.push_back(this->create_subscription<sensor_msgs::msg::BatteryState>(
+                "/" + id + "/battery_status", 10,
+                [this, id](const sensor_msgs::msg::BatteryState::SharedPtr msg) {
+                    std::lock_guard<std::mutex> lock(data_mutex_);
+                    this->battery_states_[id].percentage = msg->percentage;
+                }, sub_opt));
+
+            // Land Client
+            land_clients_[id] = this->create_client<crazyflie_interfaces::srv::Land>(
+                "/" + id + "/land", rmw_qos_profile_services_default, callback_group_);
+        }
+    }
 
     // --- DISTANCE HELPER FUNCTIONS ---
     // 2D horizontal distance (for drone-to-drone, same altitude)
@@ -449,6 +534,60 @@ private:
         }
     }
 
+    void handleBatteryLogic(const std::string& id) {
+        auto& state = battery_states_[id];
+        auto current_pos = swarm_poses_[id].pose.position;
+
+        // 1. Check for Reintegration (Charging -> Charged)
+        if (state.is_charging && state.percentage >= CHARGED_THRESHOLD) {
+            RCLCPP_INFO(this->get_logger(), "🔋 Drone %s CHARGED (%.1f%%). Taking off to rejoin swarm.", id.c_str(), state.percentage);
+            
+            // Call Takeoff
+            if (takeoff_client_->service_is_ready()) {
+                auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
+                req->height = 1.0; 
+                req->duration.sec = 2;
+                takeoff_client_->async_send_request(req);
+            }
+            
+            state.is_charging = false;
+            state.has_charged = true;
+            
+            // FREE SLOT
+            if (state.assigned_slot >= 0 && state.assigned_slot < (int)slot_occupied_.size()) {
+                slot_occupied_[state.assigned_slot] = false;
+                RCLCPP_INFO(this->get_logger(), "Slot %d freed by %s", state.assigned_slot, id.c_str());
+            }
+            state.assigned_slot = -1;
+            
+            // It will be picked up as "available" in next loop
+            return;
+        }
+
+        // 2. Check for Landing (Going -> Land)
+        if (state.is_going_to_charge) {
+            // Target is their ASSIGNED SLOT, not center
+            if (state.assigned_slot < 0 || state.assigned_slot >= (int)charging_slots_.size()) return;
+            
+            geometry_msgs::msg::Point target = charging_slots_[state.assigned_slot];
+            double dist = std::hypot(current_pos.x - target.x, current_pos.y - target.y);
+            
+            if (dist < 0.2 && !state.is_charging) {
+                RCLCPP_INFO(this->get_logger(), "⬇️ Drone %s arrived at charging slot %d. Landing.", id.c_str(), state.assigned_slot);
+                
+                auto client = land_clients_[id];
+                if (client->service_is_ready()) {
+                    auto req = std::make_shared<crazyflie_interfaces::srv::Land::Request>();
+                    req->height = 0.05;
+                    req->duration.sec = 2;
+                    client->async_send_request(req);
+                }
+                state.is_charging = true;
+                state.is_going_to_charge = false;
+            }
+        }
+    }
+
     void handleTakeoff() {
         if (!takeoff_called_) {
             if (!takeoff_client_->wait_for_service(1s)) return;
@@ -477,7 +616,7 @@ private:
 
     void handleMission() {
         // AGV Loop Detection - DISABLED FOR NOW
-        /*
+        
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (agv_start_captured_) {
@@ -505,7 +644,7 @@ private:
                 }
             }
         }
-        */
+        
 
         nav_msgs::msg::OccupancyGrid local_grid;
         geometry_msgs::msg::PoseArray local_targets;
@@ -521,14 +660,68 @@ private:
 
         const size_t num_drones = droneIds_.size();
         const size_t num_targets = local_targets.poses.size();
+
+        // --- BMS: SEPARATE AVAILABLE VS UNAVAILABLE DRONES ---
+        std::vector<std::string> available_drones;
+        std::vector<std::string> charging_drones;
+        
+        {
+             std::lock_guard<std::mutex> lock(data_mutex_);
+             for(const auto& id : droneIds_) {
+                 handleBatteryLogic(id); // Update internal states first
+                 
+                 // If charging or going to charge, EXCLUDE from mission matching
+                 if (battery_states_[id].is_charging || battery_states_[id].is_going_to_charge) {
+                     charging_drones.push_back(id);
+                 } else {
+                     available_drones.push_back(id);
+                 }
+             }
+
+             // --- PRIORITY CHECK: RECALL IF NEEDED ---
+             // If we have more targets than available drones, recall from charging pool!
+             while (available_drones.size() < num_targets && !charging_drones.empty()) {
+                 std::string recall_id = charging_drones.back();
+                 charging_drones.pop_back();
+                 available_drones.push_back(recall_id);
+                 
+                 // Reset State
+                 auto& state = battery_states_[recall_id];
+                 
+                  // If was on ground charging, TAKE OFF
+                 if (state.is_charging) {
+                    RCLCPP_WARN(this->get_logger(), "🚨 RECALLING Drone %s from charging for MISSION!", recall_id.c_str());
+                    if (takeoff_client_->service_is_ready()) {
+                        auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
+                        req->height = 1.0; 
+                        req->duration.sec = 2;
+                        takeoff_client_->async_send_request(req);
+                    }
+                 } else {
+                    RCLCPP_INFO(this->get_logger(), "↩️ Redirecting Drone %s from charging approach to MISSION.", recall_id.c_str());
+                 }
+
+                 // Free Slot
+                 if (state.assigned_slot >= 0 && state.assigned_slot < (int)slot_occupied_.size()) {
+                    slot_occupied_[state.assigned_slot] = false;
+                 }
+                 state.assigned_slot = -1;
+                 state.is_charging = false;
+                 state.is_going_to_charge = false;
+                 state.has_charged = true; // Mark as "utilized" so it doesn't immediately go back
+             }
+        }
+        
+        const size_t num_avail = available_drones.size();
         
         // --- 1. Matching Logic (Cost Matrix & Binary Search) ---
-        std::vector<std::vector<double>> costs(num_drones, std::vector<double>(num_targets));
+        // ONLY match AVAILABLE drones
+        std::vector<std::vector<double>> costs(num_avail, std::vector<double>(num_targets));
         std::vector<double> all_distances;
 
-        for (size_t i = 0; i < num_drones; ++i) {
+        for (size_t i = 0; i < num_avail; ++i) {
             for (size_t j = 0; j < num_targets; ++j) {
-                auto& d_pos = local_poses[droneIds_[i]].pose.position;
+                auto& d_pos = local_poses[available_drones[i]].pose.position;
                 auto& t_pos = local_targets.poses[j].position;
                 // Use 3D distance for drone-to-target (different altitudes)
                 double dist = dist3D(d_pos, t_pos);
@@ -541,7 +734,7 @@ private:
         int low = 0, high = all_distances.size() - 1;
         std::vector<int> final_match(num_targets, -1);
         double best_threshold = (all_distances.empty()) ? 0.0 : all_distances.back();
-        int required_matches = std::min(num_drones, num_targets);
+        int required_matches = std::min(num_avail, num_targets);
 
         while (low <= high) {
             int mid = low + (high - low) / 2;
@@ -549,7 +742,7 @@ private:
             std::vector<int> current_match(num_targets, -1);
             int matches_found = 0;
             
-            for (size_t i = 0; i < num_drones; ++i) {
+            for (size_t i = 0; i < num_avail; ++i) {
                 std::vector<bool> vis(num_targets, false);
                 if (canMatch(i, threshold, costs, current_match, vis)) matches_found++;
             }
@@ -576,12 +769,11 @@ private:
             double target_z;
         };
 
-        std::vector<DroneJob> jobs(num_drones);
-        int idle_counter = 0;
-        const double z_mission = this->get_parameter("z_target").as_double();
-        const double stack_base_alt = 2.0;
-        const double stack_interval = 0.5;
+        std::vector<DroneJob> jobs(num_drones); // We still need entries for ALL drones to process them
+        // But we only fill "jobs" based on available list + special handling for charging
 
+        const double z_mission = this->get_parameter("z_target").as_double();
+        
         // 4a. Build list of "Connection Anchors" (Base + Active Targets)
         std::vector<geometry_msgs::msg::Point> anchors;
         
@@ -595,46 +787,111 @@ private:
             anchors.push_back(pose.position);
         }
 
-        for (size_t i = 0; i < num_drones; ++i) {
-            jobs[i].id = droneIds_[i];
-            auto current_pos = local_poses[droneIds_[i]].pose.position;
+        // A. Process AVAILABLE DRONES
+        for (size_t i = 0; i < num_avail; ++i) {
+            // Find which global index this drone is
+            std::string id = available_drones[i];
+            
+            // Find global index for "jobs" array
+            auto it = std::find(droneIds_.begin(), droneIds_.end(), id);
+            size_t global_idx = std::distance(droneIds_.begin(), it);
+            
+            jobs[global_idx].id = id;
+            auto current_pos = local_poses[id].pose.position;
 
             if (drone_to_target.count(i)) {
                 // --- ACTIVE DRONE ---
-                jobs[i].is_assigned = true;
+                jobs[global_idx].is_assigned = true;
                 int t_idx = drone_to_target[i];
-                jobs[i].target_pos = local_targets.poses[t_idx].position;
-                jobs[i].target_z = z_mission;
+                jobs[global_idx].target_pos = local_targets.poses[t_idx].position;
+                jobs[global_idx].target_z = z_mission;
             } else {
-                // --- IDLE DRONE (SHADOW STRATEGY) ---
-                jobs[i].is_assigned = false;
+                // --- IDLE DRONE (SHADOW STRATEGY) OR CHARGING CANDIDATE ---
+                jobs[global_idx].is_assigned = false;
                 
-                // 1. Find the Nearest Anchor (Base or Active Drone)
-                int best_anchor_idx = 0;
-                double min_dist = 1e9;
+                // CHECK BATTERY FOR IDLE DRONE
+                bool needs_charge = false;
+                int free_slot = -1;
+                
+                {
+                    std::lock_guard<std::mutex> lock(data_mutex_);
+                    // CONDITION: Low Battery + Not Charged Yet + Charging Pool Not Full + Slot Available
+                    if (battery_states_[id].percentage < CHARGING_THRESHOLD && !battery_states_[id].has_charged) {
+                        
+                        // Check Concurrency Limit
+                        int currently_charging_count = 0;
+                        for(const auto& b : battery_states_) {
+                            if (b.second.is_charging || b.second.is_going_to_charge) currently_charging_count++;
+                        }
+                        
+                        // Check for Free Slot
+                        for(size_t s=0; s<slot_occupied_.size(); ++s) {
+                            if(!slot_occupied_[s]) {
+                                free_slot = s;
+                                break;
+                            }
+                        }
 
-                for (size_t k = 0; k < anchors.size(); ++k) {
-                    // Use 3D distance for drone-to-anchor (base/AGV at different altitude)
-                    double d = dist3D(current_pos, anchors[k]);
-                    if (d < min_dist) {
-                        min_dist = d;
-                        best_anchor_idx = k;
+                        if (currently_charging_count < MAX_CHARGING_DRONES && free_slot != -1) {
+                            battery_states_[id].is_going_to_charge = true;
+                            battery_states_[id].assigned_slot = free_slot;
+                            slot_occupied_[free_slot] = true;
+                            
+                            needs_charge = true;
+                            RCLCPP_WARN(this->get_logger(), "🪫 Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
+                                id.c_str(), battery_states_[id].percentage, free_slot);
+                        }
                     }
                 }
 
-                // 2. Assign Target to that Anchor
-                geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
+                if (needs_charge && free_slot != -1) {
+                     jobs[global_idx].target_pos = charging_slots_[free_slot];
+                     jobs[global_idx].target_z = z_mission; // Standard height to travel there
+                } else {
+                    // Standard Shadow Logic
+                    int best_anchor_idx = 0;
+                    double min_dist = 1e9;
+                    for (size_t k = 0; k < anchors.size(); ++k) {
+                        double d = dist3D(current_pos, anchors[k]);
+                        if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
+                    }
+                    geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
+                    double offset_dist = 2.0;
 
-                // 3. Collision Avoidance Offset
-                double offset_dist = 2.0;
-                
-                if (i % 4 == 0)      shadow_target.x += offset_dist;
-                else if (i % 4 == 1) shadow_target.x -= offset_dist;
-                else if (i % 4 == 2) shadow_target.y += offset_dist;
-                else                 shadow_target.y -= offset_dist;
+                    // Hashing for consistent offset
+                    int magic = id[3] - '0'; // cf_X
+                    if (magic % 4 == 0)      shadow_target.x += offset_dist;
+                    else if (magic % 4 == 1) shadow_target.x -= offset_dist;
+                    else if (magic % 4 == 2) shadow_target.y += offset_dist;
+                    else                     shadow_target.y -= offset_dist;
 
-                jobs[i].target_pos = shadow_target;
-                jobs[i].target_z = z_mission; 
+                    jobs[global_idx].target_pos = shadow_target;
+                    jobs[global_idx].target_z = z_mission; 
+                }
+            }
+        }
+        
+        // B. Process CHARGING DRONES
+        for (const std::string& id : charging_drones) {
+            auto it = std::find(droneIds_.begin(), droneIds_.end(), id);
+            size_t global_idx = std::distance(droneIds_.begin(), it);
+            jobs[global_idx].id = id;
+            jobs[global_idx].is_assigned = true; // Assigned to charging task
+            
+            // Get Assigned Slot
+            int slot = battery_states_[id].assigned_slot;
+            if (slot >= 0 && slot < (int)charging_slots_.size()) {
+                jobs[global_idx].target_pos = charging_slots_[slot];
+            } else {
+                // Should not happen if logic is correct, fallback to center or hold
+                jobs[global_idx].target_pos = charging_station_coords_;
+            }
+            
+            // If already charging (landed), set low Z.
+            if (battery_states_[id].is_charging) {
+                 jobs[global_idx].target_z = 0.05; 
+            } else {
+                 jobs[global_idx].target_z = z_mission; 
             }
         }
 
