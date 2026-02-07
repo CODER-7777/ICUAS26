@@ -223,14 +223,14 @@ private:
               // d_opt)^2 / (2*sigma^2) )
               double d_opt = 3.0; // Optimal distance from obstacle
 
-              double reward = 40.0f * std::exp(-std::pow(dist - d_opt, 2) / (2 * sigma * sigma));
+              double reward = 40.0f * std::exp(-std::pow(dist - d_opt, 2) /
+                                               (2 * sigma * sigma));
 
               // reward-=1000*std::exp(-std::pow(dist, 2) / (2 * .1 * .1));
               // Additive or Max? Usually fields are additive or max.
               // Taking MAX to avoid accumulation artifacts.
-              long_term_grid_[ny * grid_width_ + nx] =
-                  std::max(long_term_grid_[ny * grid_width_ + nx],
-                           (float)reward );
+              long_term_grid_[ny * grid_width_ + nx] = std::max(
+                  long_term_grid_[ny * grid_width_ + nx], (float)reward);
             }
           }
         }
@@ -242,40 +242,42 @@ private:
       }
     }
 
-/**
-  Iterate leaves and splat gaussian as some pixels are over written while adding reward
-  and sometimes the reward even overcomes obstacles which we cannot allow
-**/
+    /**
+      Iterate leaves and splat gaussian as some pixels are over written while
+    adding reward and sometimes the reward even overcomes obstacles which we
+    cannot allow
+    **/
     for (auto it = octree_->begin_leafs(), end = octree_->end_leafs();
          it != end; ++it) {
       if (octree_->isNodeOccupied(*it)) {
-      double ox = it.getX();
-      double oy = it.getY();
-      double oz = it.getZ();
+        double ox = it.getX();
+        double oy = it.getY();
+        double oz = it.getZ();
 
-      if (oz < z_min || oz > z_max)
-        continue;
+        if (oz < z_min || oz > z_max)
+          continue;
 
-      // Effect range in grid cells
-      int range_cells = std::ceil(max_dist / grid_res_);
+        // Effect range in grid cells
+        int range_cells = std::ceil(max_dist / grid_res_);
 
-      int cx = std::floor((ox - grid_origin_x_) / grid_res_);
-      int cy = std::floor((oy - grid_origin_y_) / grid_res_);
+        int cx = std::floor((ox - grid_origin_x_) / grid_res_);
+        int cy = std::floor((oy - grid_origin_y_) / grid_res_);
 
-      for (int dy = -range_cells; dy <= range_cells; ++dy) {
-        for (int dx = -range_cells; dx <= range_cells; ++dx) {
-          int nx = cx + dx;
-          int ny = cy + dy;
-          if (nx >= 0 && nx < grid_width_ && ny >= 0 && ny < grid_height_) {
-            double dist = std::sqrt(dx * dx + dy * dy) * grid_res_;
-            if (dist > max_dist)
-              continue;
-            double penalty=-100*std::exp(-std::pow(dist, 2) / (2 * .15 * .15));
+        for (int dy = -range_cells; dy <= range_cells; ++dy) {
+          for (int dx = -range_cells; dx <= range_cells; ++dx) {
+            int nx = cx + dx;
+            int ny = cy + dy;
+            if (nx >= 0 && nx < grid_width_ && ny >= 0 && ny < grid_height_) {
+              double dist = std::sqrt(dx * dx + dy * dy) * grid_res_;
+              if (dist > max_dist)
+                continue;
+              double penalty =
+                  -100 * std::exp(-std::pow(dist, 2) / (2 * .15 * .15));
 
-            long_term_grid_[ny * grid_width_ + nx] += (float) penalty;
+              long_term_grid_[ny * grid_width_ + nx] += (float)penalty;
+            }
+          }
         }
-      }
-       }
       }
     }
   }
@@ -295,6 +297,8 @@ private:
     double flatten = this->get_parameter("flatten_strength").as_double();
     double flatten_sigma = this->get_parameter("flatten_sigma").as_double();
 
+    std::fill(temp_grid_.begin(), temp_grid_.end(), 0.0f);
+
     // 1. Update Long Term Grid (Flattening) - for ALL drones
     for (int i = 0; i < 5; ++i) {
       if (!has_pose_[i])
@@ -305,7 +309,7 @@ private:
 
       // Determine range to check (3 * sigma is enough for Gaussian)
       double range = 3.0 * flatten_sigma;
-      int range_cells = std::ceil(range / grid_res_);
+      int range_cells = std::ceil(range * 1.2 / grid_res_);
 
       // Current grid position of the drone
       int cx = std::floor((drone_x - grid_origin_x_) / grid_res_);
@@ -336,6 +340,9 @@ private:
               double decay_factor = std::max(0.0, 1.0 - (flatten * weight));
               val *= (float)decay_factor;
             }
+
+            // Marking range
+            octomap::point3d origin(drone_x, drone_y, 3.0);
           }
         }
       }
@@ -346,7 +353,6 @@ private:
     // "more and more negative as we move away from end of LOS"
     // Let's assume -50.0 is base occlusion penalty, and we add more penalty for
     // depth. Or just start with -100 (Deeply occluded).
-    std::fill(temp_grid_.begin(), temp_grid_.end(), 0.0f);
 
     // For optimization, we can iterate drones then pixels, or pixels then
     // drones. Since we want max(drone1, drone2...), iterating pixels then
@@ -390,10 +396,9 @@ private:
           any_drone_active = true;
 
           octomap::point3d origin(drone_poses_[i].pose.position.x,
-                                  drone_poses_[i].pose.position.y,
-                                  3.0
+                                  drone_poses_[i].pose.position.y, 3.0
                                   // drone_poses_[i].pose.position.z
-                                  );
+          );
 
           octomap::point3d ray_end;
           // max range 3m
@@ -403,7 +408,7 @@ private:
           double dist_to_hit = (ray_end - origin).norm();
 
           float val;
-          if ((!hit && dist_to_cell<=3.0) || dist_to_hit >= dist_to_cell) {
+          if ((!hit && dist_to_cell <= 3.0) || dist_to_hit >= dist_to_cell) {
             val = 30.0f; // Visible: Base value to distinguish from unknown
           } else {
             double depth = dist_to_cell - 3.0;
