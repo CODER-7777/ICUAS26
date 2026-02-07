@@ -156,7 +156,7 @@ private:
     std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Land>::SharedPtr> land_clients_;
     
     geometry_msgs::msg::Point charging_station_coords_;
-    const float CHARGING_THRESHOLD = 85.0f; // Updated per user desire/code snapshot
+    const float CHARGING_THRESHOLD = 70.0f; // Updated per user desire/code snapshot
     const float CHARGED_THRESHOLD = 88.0f;
 
     // --- Charging Slots & Concurrency ---

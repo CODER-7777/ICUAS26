@@ -18,6 +18,7 @@ find_package(octomap_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 add_executable(bfs src/bfs.cpp)
@@ -27,7 +28,7 @@ add_executable(prediction src/prediction.cpp)
 
 ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs visualization_msgs)
 ament_target_dependencies(occupancy  rclcpp octomap octomap_msgs nav2_msgs)
-ament_target_dependencies(move  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
+ament_target_dependencies(move  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces sensor_msgs)
 ament_target_dependencies(prediction  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
 
 target_link_libraries(bfs
