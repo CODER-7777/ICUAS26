@@ -661,36 +661,83 @@ private:
         const size_t num_drones = droneIds_.size();
         const size_t num_targets = local_targets.poses.size();
 
+
         // --- BMS: SEPARATE AVAILABLE VS UNAVAILABLE DRONES ---
         std::vector<std::string> available_drones;
         std::vector<std::string> charging_drones;
-        
+
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
              for(const auto& id : droneIds_) {
-                 handleBatteryLogic(id); // Update internal states first
+                 handleBatteryLogic(id); // Update internal states
                  
-                 // If charging or going to charge, EXCLUDE from mission matching
+                 // 1. Check if ALREADY charging/going
                  if (battery_states_[id].is_charging || battery_states_[id].is_going_to_charge) {
                      charging_drones.push_back(id);
-                 } else {
-                     available_drones.push_back(id);
+                 } 
+                 else {
+                     // 2. CHECK IF NEEDS CHARGE (Hot Swap Trigger)
+                     // Even if assigned, if battery is low and slot available -> Send to charge
+                     bool condition_met = false;
+                     
+                     if (battery_states_[id].percentage < CHARGING_THRESHOLD && !battery_states_[id].has_charged) {
+                         // Check Concurrency
+                         int currently_charging_count = 0;
+                         for(const auto& b : battery_states_) {
+                            if (b.second.is_charging || b.second.is_going_to_charge) currently_charging_count++;
+                         }
+                         
+                         // Check Slot
+                         int free_slot = -1;
+                         for(size_t s=0; s<slot_occupied_.size(); ++s) {
+                            if(!slot_occupied_[s]) { free_slot = s; break; }
+                         }
+
+                         if (currently_charging_count < MAX_CHARGING_DRONES && free_slot != -1) {
+                             // TRIGGER CHARGE
+                             battery_states_[id].is_going_to_charge = true;
+                             battery_states_[id].assigned_slot = free_slot;
+                             slot_occupied_[free_slot] = true;
+                             RCLCPP_WARN(this->get_logger(), "🪫 Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
+                                id.c_str(), battery_states_[id].percentage, free_slot);
+                             
+                             charging_drones.push_back(id);
+                             condition_met = true;
+                         }
+                     }
+                     
+                     if (!condition_met) {
+                         available_drones.push_back(id);
+                     }
                  }
              }
 
-             // --- PRIORITY CHECK: RECALL IF NEEDED ---
-             // If we have more targets than available drones, recall from charging pool!
+             // --- PRIORITY CHECK: RECALL IF NEEDED (SMART RECALL) ---
+             // Sort charging_drones by Battery Percentage (Highest First)
+             std::sort(charging_drones.begin(), charging_drones.end(), 
+                 [this](const std::string& a, const std::string& b) {
+                     return battery_states_[a].percentage > battery_states_[b].percentage;
+                 });
+
+             // If we have more targets than available drones, recall BEST candidates
              while (available_drones.size() < num_targets && !charging_drones.empty()) {
-                 std::string recall_id = charging_drones.back();
-                 charging_drones.pop_back();
+                 // Pick Best Candidate (Highest Battery) - now at beginning after sort? 
+                 // wait, std::sort defaults to ascending. We want descending (Highest first).
+                 // So "percentage > percentage" means a > b. 
+                 // So beginning is Highest.
+                 
+                 std::string recall_id = charging_drones.front(); // BEST BATTERY
+                 charging_drones.erase(charging_drones.begin());
+                 
                  available_drones.push_back(recall_id);
                  
                  // Reset State
                  auto& state = battery_states_[recall_id];
                  
-                  // If was on ground charging, TAKE OFF
+                 // If was on ground charging, TAKE OFF
                  if (state.is_charging) {
-                    RCLCPP_WARN(this->get_logger(), "🚨 RECALLING Drone %s from charging for MISSION!", recall_id.c_str());
+                    RCLCPP_WARN(this->get_logger(), "🚨 RECALLING Drone %s (%.1f%%) from charging for MISSION!", 
+                        recall_id.c_str(), state.percentage);
                     if (takeoff_client_->service_is_ready()) {
                         auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
                         req->height = 1.0; 
@@ -698,7 +745,8 @@ private:
                         takeoff_client_->async_send_request(req);
                     }
                  } else {
-                    RCLCPP_INFO(this->get_logger(), "↩️ Redirecting Drone %s from charging approach to MISSION.", recall_id.c_str());
+                    RCLCPP_INFO(this->get_logger(), "↩️ Redirecting Drone %s (%.1f%%) from charging approach to MISSION.", 
+                        recall_id.c_str(), state.percentage);
                  }
 
                  // Free Slot
@@ -708,7 +756,7 @@ private:
                  state.assigned_slot = -1;
                  state.is_charging = false;
                  state.is_going_to_charge = false;
-                 state.has_charged = true; // Mark as "utilized" so it doesn't immediately go back
+                 state.has_charged = true; 
              }
         }
         
@@ -806,68 +854,31 @@ private:
                 jobs[global_idx].target_pos = local_targets.poses[t_idx].position;
                 jobs[global_idx].target_z = z_mission;
             } else {
-                // --- IDLE DRONE (SHADOW STRATEGY) OR CHARGING CANDIDATE ---
+                // --- IDLE DRONE (SHADOW STRATEGY) ---
                 jobs[global_idx].is_assigned = false;
                 
-                // CHECK BATTERY FOR IDLE DRONE
-                bool needs_charge = false;
-                int free_slot = -1;
-                
-                {
-                    std::lock_guard<std::mutex> lock(data_mutex_);
-                    // CONDITION: Low Battery + Not Charged Yet + Charging Pool Not Full + Slot Available
-                    if (battery_states_[id].percentage < CHARGING_THRESHOLD && !battery_states_[id].has_charged) {
-                        
-                        // Check Concurrency Limit
-                        int currently_charging_count = 0;
-                        for(const auto& b : battery_states_) {
-                            if (b.second.is_charging || b.second.is_going_to_charge) currently_charging_count++;
-                        }
-                        
-                        // Check for Free Slot
-                        for(size_t s=0; s<slot_occupied_.size(); ++s) {
-                            if(!slot_occupied_[s]) {
-                                free_slot = s;
-                                break;
-                            }
-                        }
+                // NO BATTERY CHECK HERE - ALREADY HANDLED IN PRE-MATCHING!
+                // Just fallback to Shadow Logic
 
-                        if (currently_charging_count < MAX_CHARGING_DRONES && free_slot != -1) {
-                            battery_states_[id].is_going_to_charge = true;
-                            battery_states_[id].assigned_slot = free_slot;
-                            slot_occupied_[free_slot] = true;
-                            
-                            needs_charge = true;
-                            RCLCPP_WARN(this->get_logger(), "🪫 Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
-                                id.c_str(), battery_states_[id].percentage, free_slot);
-                        }
-                    }
+                // Standard Shadow Logic
+                int best_anchor_idx = 0;
+                double min_dist = 1e9;
+                for (size_t k = 0; k < anchors.size(); ++k) {
+                    double d = dist3D(current_pos, anchors[k]);
+                    if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
                 }
+                geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
+                double offset_dist = 2.0;
 
-                if (needs_charge && free_slot != -1) {
-                     jobs[global_idx].target_pos = charging_slots_[free_slot];
-                     jobs[global_idx].target_z = z_mission; // Standard height to travel there
-                } else {
-                    // Standard Shadow Logic
-                    int best_anchor_idx = 0;
-                    double min_dist = 1e9;
-                    for (size_t k = 0; k < anchors.size(); ++k) {
-                        double d = dist3D(current_pos, anchors[k]);
-                        if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
-                    }
-                    geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
-                    double offset_dist = 2.0;
+                // Hashing for consistent offset
+                int magic = id[3] - '0'; // cf_X
+                if (magic % 4 == 0)      shadow_target.x += offset_dist;
+                else if (magic % 4 == 1) shadow_target.x -= offset_dist;
+                else if (magic % 4 == 2) shadow_target.y += offset_dist;
+                else                     shadow_target.y -= offset_dist;
 
-                    // Hashing for consistent offset
-                    int magic = id[3] - '0'; // cf_X
-                    if (magic % 4 == 0)      shadow_target.x += offset_dist;
-                    else if (magic % 4 == 1) shadow_target.x -= offset_dist;
-                    else if (magic % 4 == 2) shadow_target.y += offset_dist;
-                    else                     shadow_target.y -= offset_dist;
-
-                    jobs[global_idx].target_pos = shadow_target;
-                    jobs[global_idx].target_z = z_mission; 
-                }
+                jobs[global_idx].target_pos = shadow_target;
+                jobs[global_idx].target_z = z_mission; 
             }
         }
         
