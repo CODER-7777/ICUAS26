@@ -308,7 +308,7 @@ private:
       double drone_y = drone_poses_[i].pose.position.y;
 
       // Determine range to check (3 * sigma is enough for Gaussian)
-      double range = 15.0 * flatten_sigma;
+      double range = 10.0 * flatten_sigma;
       int range_cells = std::ceil(range / grid_res_);
 
       // Current grid position of the drone
@@ -382,7 +382,7 @@ private:
 
     msg.data.resize(grid_width_ * grid_height_);
 
-    for (size_t i = 0; i < grid_width_ * grid_height_; ++i) {
+    for (int i = 0; i < grid_width_ * grid_height_; ++i) {
       float sum = long_term_grid_[i] + temp_grid_[i];
       int val = std::clamp((int)sum, 0, 100);
       msg.data[i] = (int8_t)val;
