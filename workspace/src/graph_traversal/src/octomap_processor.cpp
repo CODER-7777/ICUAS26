@@ -308,8 +308,8 @@ private:
       double drone_y = drone_poses_[i].pose.position.y;
 
       // Determine range to check (3 * sigma is enough for Gaussian)
-      double range = 3.0 * flatten_sigma;
-      int range_cells = std::ceil(range * 1.2 / grid_res_);
+      double range = 15.0 * flatten_sigma;
+      int range_cells = std::ceil(range / grid_res_);
 
       // Current grid position of the drone
       int cx = std::floor((drone_x - grid_origin_x_) / grid_res_);
@@ -342,88 +342,29 @@ private:
             }
 
             // Marking range
+            float max_local_val = -1000.0f; // Very negative start
             octomap::point3d origin(drone_x, drone_y, 3.0);
+            octomap::point3d end(cell_x, cell_y, 3.0);
+            octomap::point3d ray_end;
+            // max range 3m
+            bool hit =
+                octree_->castRay(origin, end - origin, ray_end, true, 3.0);
+
+            double dist_to_cell = (end - origin).norm();
+            double dist_to_hit = (ray_end - origin).norm();
+
+            float val2;
+            if ((!hit && dist_to_cell <= 3.0) || dist_to_hit >= dist_to_cell) {
+              val2 = 30.0f; // Visible: Base value to distinguish from unknown
+            } else {
+              double depth = dist_to_cell - 3.0;
+              val2 = 30.0f * std::exp(-std::pow(depth, 2) / (2 * 1 * 1));
+              // val = -10.0f * (float)depth; // Occluded
+            }
+            if (val2 > max_local_val)
+              max_local_val = val2;
+            temp_grid_[ny * grid_width_ + nx] = max_local_val;
           }
-        }
-      }
-    }
-
-    // 2. Compute Temp Grid (LOS) - aggregated
-    // Initialize with a low negative value (occluded state)
-    // "more and more negative as we move away from end of LOS"
-    // Let's assume -50.0 is base occlusion penalty, and we add more penalty for
-    // depth. Or just start with -100 (Deeply occluded).
-
-    // For optimization, we can iterate drones then pixels, or pixels then
-    // drones. Since we want max(drone1, drone2...), iterating pixels then
-    // drones is easier logic wise but raycasting per pixel per drone is
-    // expensive.
-    //
-    // Optimization: Raycast is expensive.
-    // Let's do: For each cell, we check visibility against *each* available
-    // drone. temp_grid[cell] = max over drones ( visibility_score(drone, cell)
-    // ) visible = 0. occluded = -depth * 10.
-
-    // NOTE: This runs at 10Hz. 5 * Width * Height raycasts might be too slow if
-    // grid is large. If grid is 100x100 = 10,000 cells. 5 drones = 50,000
-    // raycasts. Octomap raycast is fairly fast but 50k might take >100ms. Let's
-    // try it. If slow, we optimize by bounding box or similar.
-
-    for (int y = 0; y < grid_height_; ++y) {
-      for (int x = 0; x < grid_width_; ++x) {
-        double wx = grid_origin_x_ + (x + 0.5) * grid_res_;
-        double wy = grid_origin_y_ + (y + 0.5) * grid_res_;
-
-        // Target point
-        // Using average drone height or actual drone height? All drones might
-        // be at different Z. We project into 2D grid. The visibility depends on
-        // the 3D line. Let's check visibility from drone (X,Y,Z) to target
-        // (x,y, Z_averaged? or Z_drone?) If we want to know if the cell is
-        // visible "on the ground" or "at flight altitude"? Usually "Map
-        // visibility". Let's assume visibility of the *cell center* at *grid
-        // slice height*. Or better: visibility of the cell at *drone's* height?
-        // Let's use a fixed height for the target cell, e.g., 3.0m (center of
-        // interest).
-        double target_z = 3.0;
-        octomap::point3d end(wx, wy, target_z);
-
-        float max_local_val = -1000.0f; // Very negative start
-        bool any_drone_active = false;
-
-        for (int i = 0; i < 5; ++i) {
-          if (!has_pose_[i])
-            continue;
-          any_drone_active = true;
-
-          octomap::point3d origin(drone_poses_[i].pose.position.x,
-                                  drone_poses_[i].pose.position.y, 3.0
-                                  // drone_poses_[i].pose.position.z
-          );
-
-          octomap::point3d ray_end;
-          // max range 3m
-          bool hit = octree_->castRay(origin, end - origin, ray_end, true, 3.0);
-
-          double dist_to_cell = (end - origin).norm();
-          double dist_to_hit = (ray_end - origin).norm();
-
-          float val;
-          if ((!hit && dist_to_cell <= 3.0) || dist_to_hit >= dist_to_cell) {
-            val = 30.0f; // Visible: Base value to distinguish from unknown
-          } else {
-            double depth = dist_to_cell - 3.0;
-            val = 30.0f * std::exp(-std::pow(depth, 2) / (2 * 1 * 1));
-            // val = -10.0f * (float)depth; // Occluded
-          }
-          if (val > max_local_val)
-            max_local_val = val;
-        }
-
-        if (any_drone_active) {
-          temp_grid_[y * grid_width_ + x] = max_local_val;
-        } else {
-          // No drones, keep default or set to specific
-          temp_grid_[y * grid_width_ + x] = -50.0f;
         }
       }
     }
