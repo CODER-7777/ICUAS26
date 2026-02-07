@@ -32,6 +32,7 @@ struct DroneBatteryState {
     bool is_charging = false;     // Currently on ground charging
     bool is_going_to_charge = false; // En route to charging area
     int assigned_slot = -1;       // -1: None, 0..N: Slot Index
+    float start_charge_percentage = 0.0f; // Battery level when charging started
 };
 
 // Node for A* Priority Queue
@@ -697,6 +698,7 @@ private:
                              // TRIGGER CHARGE
                              battery_states_[id].is_going_to_charge = true;
                              battery_states_[id].assigned_slot = free_slot;
+                             battery_states_[id].start_charge_percentage = battery_states_[id].percentage;
                              slot_occupied_[free_slot] = true;
                              RCLCPP_WARN(this->get_logger(), "🪫 Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
                                 id.c_str(), battery_states_[id].percentage, free_slot);
@@ -727,6 +729,21 @@ private:
                  // So beginning is Highest.
                  
                  std::string recall_id = charging_drones.front(); // BEST BATTERY
+                 
+                 // --- GUARD CONDITION: RECALL THRESHOLD ---
+                 // Only recall if we have gained at least 10% charge OR if we have NO available drones
+                 float current_pct = battery_states_[recall_id].percentage;
+                 float start_pct = battery_states_[recall_id].start_charge_percentage;
+                 
+                 bool can_recall = (current_pct >= start_pct + 10.0f) || (available_drones.empty());
+                 
+                 if (!can_recall && !available_drones.empty()) {
+                     // We have SOME drones, and this charging drone hasn't charged enough.
+                     // Skip it and stop looking (since this was the BEST one).
+                     break; 
+                 }
+                 
+                 // Proceed with recall
                  charging_drones.erase(charging_drones.begin());
                  
                  available_drones.push_back(recall_id);
