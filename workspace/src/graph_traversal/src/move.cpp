@@ -661,7 +661,6 @@ private:
         // --- BMS: SEPARATE AVAILABLE VS UNAVAILABLE DRONES ---
         std::vector<std::string> available_drones;
         std::vector<std::string> charging_drones;
-        std::vector<std::string> waiting_drones;
 
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
@@ -705,13 +704,9 @@ private:
                      }
                      
                      if (!condition_met) {
-                         if (battery_states_[id].percentage < CHARGING_THRESHOLD && !battery_states_[id].has_charged) {
-                             waiting_drones.push_back(id);
-                             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
-                                "⏳ Drone %s waiting for charger (%.1f%%)", id.c_str(), battery_states_[id].percentage);
-                         } else {
-                             available_drones.push_back(id);
-                         }
+                         // User Feedback 1: Continue mission if queues are full
+                         // Don't freeze. Just keep them available.
+                         available_drones.push_back(id);
                      }
                  }
              }
@@ -908,7 +903,13 @@ private:
             if (battery_states_[id].is_leaving_charger) {
                  double elapsed = (this->now() - battery_states_[id].start_leaving_time).seconds();
                  
-                 if (elapsed > 5.0) {
+                 // Distance check for early release
+                 double dx = local_poses[id].pose.position.x - charging_station_coords_.x;
+                 double dy = local_poses[id].pose.position.y - charging_station_coords_.y;
+                 double dist_from_center = std::hypot(dx, dy);
+
+                 // User Feedback 2: Don't get stuck. Clear if moved away (>1.5m) OR timeout
+                 if (dist_from_center > 1.5 || elapsed > 5.0) {
                      // Finished clearing
                      {
                          std::lock_guard<std::mutex> lock(data_mutex_);
@@ -919,7 +920,7 @@ private:
                          int s = battery_states_[id].assigned_slot;
                          if (s >= 0 && s < (int)slot_occupied_.size()) {
                              slot_occupied_[s] = false;
-                             RCLCPP_INFO(this->get_logger(), "🕊️ Slot %d freed by %s (Cleared)", s, id.c_str());
+                             RCLCPP_INFO(this->get_logger(), "🕊️ Slot %d freed by %s (Cleared dist=%.2fm)", s, id.c_str(), dist_from_center);
                          }
                          battery_states_[id].assigned_slot = -1;
                      }
@@ -972,16 +973,8 @@ private:
             }
         }
 
-        // C. Process WAITING DRONES
-        for (const std::string& id : waiting_drones) {
-            auto it = std::find(droneIds_.begin(), droneIds_.end(), id);
-            size_t global_idx = std::distance(droneIds_.begin(), it);
-            jobs[global_idx].id = id;
-            jobs[global_idx].is_assigned = true; 
-            // Hover at current position
-            jobs[global_idx].target_pos = local_poses[id].pose.position;
-            jobs[global_idx].target_z = z_mission;
-        }
+        // C. Process WAITING DRONES - REMOVED PER FEEDBACK
+        // (Drones in queue are now in Available list)
 
         std::vector<std::pair<std::string, std::vector<crazyflie_interfaces::msg::Position>>> new_commands(droneIds_.size());
 
