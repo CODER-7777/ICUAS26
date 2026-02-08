@@ -31,6 +31,8 @@ struct DroneBatteryState {
     bool has_charged = false;     // Can only charge once
     bool is_charging = false;     // Currently on ground charging
     bool is_going_to_charge = false; // En route to charging area
+    bool is_leaving_charger = false; // NEW: Post-charge clearance maneuver
+    rclcpp::Time start_leaving_time; // NEW: Timer for clearance
     int assigned_slot = -1;       // -1: None, 0..N: Slot Index
     float start_charge_percentage = 0.0f; // Battery level when charging started
 };
@@ -101,8 +103,7 @@ public:
         octomap_client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary", 
             rmw_qos_profile_services_default, callback_group_);
         
-        takeoff_client_ = this->create_client<crazyflie_interfaces::srv::Takeoff>("/all/takeoff",
-            rmw_qos_profile_services_default, callback_group_);
+
 
         // 4. Timers
         // Init: Get map once
@@ -121,7 +122,6 @@ private:
     rclcpp::CallbackGroup::SharedPtr callback_group_;
     rclcpp::TimerBase::SharedPtr timer_, init_timer_, control_timer_;
     rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedPtr octomap_client_;
-    rclcpp::Client<crazyflie_interfaces::srv::Takeoff>::SharedPtr takeoff_client_;
     
     SwarmState current_state_;
     bool takeoff_called_ = false;
@@ -155,6 +155,7 @@ private:
     std::map<std::string, DroneBatteryState> battery_states_;
     std::vector<rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr> battery_subs_;
     std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Land>::SharedPtr> land_clients_;
+    std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Takeoff>::SharedPtr> takeoff_clients_;
     
     geometry_msgs::msg::Point charging_station_coords_;
     const float CHARGING_THRESHOLD = 70.0f; // Updated per user desire/code snapshot
@@ -220,6 +221,10 @@ private:
             // Land Client
             land_clients_[id] = this->create_client<crazyflie_interfaces::srv::Land>(
                 "/" + id + "/land", rmw_qos_profile_services_default, callback_group_);
+                
+            // Takeoff Client (Individual)
+            takeoff_clients_[id] = this->create_client<crazyflie_interfaces::srv::Takeoff>(
+                "/" + id + "/takeoff", rmw_qos_profile_services_default, callback_group_);
         }
     }
 
@@ -459,11 +464,12 @@ private:
         return {};
     }
 
-    std::vector<geometry_msgs::msg::Point> runPlanningPipeline(const nav_msgs::msg::OccupancyGrid& map, geometry_msgs::msg::Point target, geometry_msgs::msg::Point current_pos) {
+    std::vector<geometry_msgs::msg::Point> runPlanningPipeline(const nav_msgs::msg::OccupancyGrid& map, geometry_msgs::msg::Point target, geometry_msgs::msg::Point current_pos, double target_z) {
         const double res = map.info.resolution;
         const double ox = map.info.origin.position.x;
         const double oy = map.info.origin.position.y;
-        const double target_z = this->get_parameter("z_target").as_double();
+        // target_z is now an argument
+
 
         auto gToW = [&](int i, int j) {
             geometry_msgs::msg::Point p;
@@ -539,29 +545,20 @@ private:
         auto& state = battery_states_[id];
         auto current_pos = swarm_poses_[id].pose.position;
 
-        // 1. Check for Reintegration (Charging -> Charged)
-        if (state.is_charging && state.percentage >= CHARGED_THRESHOLD) {
-            RCLCPP_INFO(this->get_logger(), "🔋 Drone %s CHARGED (%.1f%%). Taking off to rejoin swarm.", id.c_str(), state.percentage);
-            
-            // Call Takeoff
-            if (takeoff_client_->service_is_ready()) {
-                auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
-                req->height = 1.0; 
-                req->duration.sec = 2;
-                takeoff_client_->async_send_request(req);
+        // 3. Check for Takeoff (Charged -> Takeoff & Clear)
+        // 3. Check for Takeoff (Charged -> Takeoff & Clear)
+        if (state.is_charging) {
+            // Check if charged
+            if (state.percentage >= 88.0) { // 88% Threshold
+                state.is_charging = false;
+                state.is_leaving_charger = true;
+                state.start_leaving_time = this->now();
+                
+                // DO NOT FREE SLOT YET - WAIT UNTIL CLEARED!
+                // state.assigned_slot remains valid
+                
+                RCLCPP_INFO(this->get_logger(), "🔋 Drone %s CHARGED. Low Takeoff (Z=0.5) & Clearing Area.", id.c_str());
             }
-            
-            state.is_charging = false;
-            state.has_charged = true;
-            
-            // FREE SLOT
-            if (state.assigned_slot >= 0 && state.assigned_slot < (int)slot_occupied_.size()) {
-                slot_occupied_[state.assigned_slot] = false;
-                RCLCPP_INFO(this->get_logger(), "Slot %d freed by %s", state.assigned_slot, id.c_str());
-            }
-            state.assigned_slot = -1;
-            
-            // It will be picked up as "available" in next loop
             return;
         }
 
@@ -573,16 +570,10 @@ private:
             geometry_msgs::msg::Point target = charging_slots_[state.assigned_slot];
             double dist = std::hypot(current_pos.x - target.x, current_pos.y - target.y);
             
-            if (dist < 0.2 && !state.is_charging) {
-                RCLCPP_INFO(this->get_logger(), "⬇️ Drone %s arrived at charging slot %d. Landing.", id.c_str(), state.assigned_slot);
+            if (dist < 0.1 && !state.is_charging) {
+                RCLCPP_INFO(this->get_logger(), "⬇️ Drone %s arrived at charging slot %d. 'Landing' to Z=0.05.", id.c_str(), state.assigned_slot);
                 
-                auto client = land_clients_[id];
-                if (client->service_is_ready()) {
-                    auto req = std::make_shared<crazyflie_interfaces::srv::Land::Request>();
-                    req->height = 0.05;
-                    req->duration.sec = 2;
-                    client->async_send_request(req);
-                }
+                // NO LAND SERVICE - Just state switch + Z command
                 state.is_charging = true;
                 state.is_going_to_charge = false;
             }
@@ -591,12 +582,16 @@ private:
 
     void handleTakeoff() {
         if (!takeoff_called_) {
-            if (!takeoff_client_->wait_for_service(1s)) return;
-            auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
-            req->height = 1.0; 
-            req->duration.sec = 2;
-            req->duration.nanosec = 0;
-            takeoff_client_->async_send_request(req);
+            for(const auto& id : droneIds_) {
+                auto client = takeoff_clients_[id];
+                if (!client->service_is_ready()) continue;
+                
+                auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
+                req->height = 1.0; 
+                req->duration.sec = 2;
+                req->duration.nanosec = 0;
+                client->async_send_request(req);
+            }
             takeoff_called_ = true;
             return;
         }
@@ -666,14 +661,15 @@ private:
         // --- BMS: SEPARATE AVAILABLE VS UNAVAILABLE DRONES ---
         std::vector<std::string> available_drones;
         std::vector<std::string> charging_drones;
+        std::vector<std::string> waiting_drones;
 
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
              for(const auto& id : droneIds_) {
                  handleBatteryLogic(id); // Update internal states
                  
-                 // 1. Check if ALREADY charging/going
-                 if (battery_states_[id].is_charging || battery_states_[id].is_going_to_charge) {
+                 // 1. Check if ALREADY charging/going/leaving
+                 if (battery_states_[id].is_charging || battery_states_[id].is_going_to_charge || battery_states_[id].is_leaving_charger) {
                      charging_drones.push_back(id);
                  } 
                  else {
@@ -709,7 +705,13 @@ private:
                      }
                      
                      if (!condition_met) {
-                         available_drones.push_back(id);
+                         if (battery_states_[id].percentage < CHARGING_THRESHOLD && !battery_states_[id].has_charged) {
+                             waiting_drones.push_back(id);
+                             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
+                                "⏳ Drone %s waiting for charger (%.1f%%)", id.c_str(), battery_states_[id].percentage);
+                         } else {
+                             available_drones.push_back(id);
+                         }
                      }
                  }
              }
@@ -751,16 +753,12 @@ private:
                  // Reset State
                  auto& state = battery_states_[recall_id];
                  
-                 // If was on ground charging, TAKE OFF
+                 // If was on ground charging, TAKE OFF (Virtual)
                  if (state.is_charging) {
                     RCLCPP_WARN(this->get_logger(), "🚨 RECALLING Drone %s (%.1f%%) from charging for MISSION!", 
                         recall_id.c_str(), state.percentage);
-                    if (takeoff_client_->service_is_ready()) {
-                        auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
-                        req->height = 1.0; 
-                        req->duration.sec = 2;
-                        takeoff_client_->async_send_request(req);
-                    }
+                    // No Service call needed, just state change.
+                    // Loop will pick up Z=Mission Height next cycle.
                  } else {
                     RCLCPP_INFO(this->get_logger(), "↩️ Redirecting Drone %s (%.1f%%) from charging approach to MISSION.", 
                         recall_id.c_str(), state.percentage);
@@ -899,35 +897,102 @@ private:
             }
         }
         
-        // B. Process CHARGING DRONES
+        // B. Process CHARGING DRONES (includes Going, Charging, Leaving)
         for (const std::string& id : charging_drones) {
             auto it = std::find(droneIds_.begin(), droneIds_.end(), id);
             size_t global_idx = std::distance(droneIds_.begin(), it);
             jobs[global_idx].id = id;
-            jobs[global_idx].is_assigned = true; // Assigned to charging task
+            jobs[global_idx].is_assigned = true; 
             
+            // 1. CHECK IF LEAVING CHARGER
+            if (battery_states_[id].is_leaving_charger) {
+                 double elapsed = (this->now() - battery_states_[id].start_leaving_time).seconds();
+                 
+                 if (elapsed > 5.0) {
+                     // Finished clearing
+                     {
+                         std::lock_guard<std::mutex> lock(data_mutex_);
+                         battery_states_[id].is_leaving_charger = false;
+                         battery_states_[id].has_charged = true; 
+                         
+                         // LATE SLOT RELEASE:
+                         int s = battery_states_[id].assigned_slot;
+                         if (s >= 0 && s < (int)slot_occupied_.size()) {
+                             slot_occupied_[s] = false;
+                             RCLCPP_INFO(this->get_logger(), "🕊️ Slot %d freed by %s (Cleared)", s, id.c_str());
+                         }
+                         battery_states_[id].assigned_slot = -1;
+                     }
+                     // Drone will become available next cycle
+                     RCLCPP_INFO(this->get_logger(), "✅ Drone %s Cleared Charging Area.", id.c_str());
+                     
+                     // Current cycle: Just Hover where it is (or move to safe spot)
+                     // It's effectively free now.
+                 } else {
+                     // EXECUTING CLEARANCE MANEUVER
+                     // Move horizontally away from center
+                     double dx = local_poses[id].pose.position.x - charging_station_coords_.x;
+                     double dy = local_poses[id].pose.position.y - charging_station_coords_.y;
+                     
+                     // Normalized vector away from center
+                     double dist_c = std::hypot(dx, dy);
+                     double nx = (dist_c > 0.01) ? dx/dist_c : 1.0;
+                     double ny = (dist_c > 0.01) ? dy/dist_c : 0.0;
+                     
+                     // Target = Center + 2.0m direction
+                     jobs[global_idx].target_pos.x = charging_station_coords_.x + nx * 2.0;
+                     jobs[global_idx].target_pos.y = charging_station_coords_.y + ny * 2.0;
+                     jobs[global_idx].target_pos.z = 0.5; // Keep LOW
+                     jobs[global_idx].target_z = 0.5;
+                 }
+                 continue; // Done with this drone
+            }
+
+            // 2. CHECK IF GOING TO CHARGE OR CHARGING (Landed)
             // Get Assigned Slot
             int slot = battery_states_[id].assigned_slot;
             if (slot >= 0 && slot < (int)charging_slots_.size()) {
                 jobs[global_idx].target_pos = charging_slots_[slot];
             } else {
-                // Should not happen if logic is correct, fallback to center or hold
-                jobs[global_idx].target_pos = charging_station_coords_;
+                // ERROR STATE: Should have slot. Hover safety.
+                RCLCPP_ERROR(this->get_logger(), "Drone %s has invalid slot %d! Hovering.", id.c_str(), slot);
+                jobs[global_idx].target_pos = local_poses[id].pose.position;
+                jobs[global_idx].target_z = z_mission;
+                continue;
             }
             
             // If already charging (landed), set low Z.
             if (battery_states_[id].is_charging) {
+                 // HOLD POSITION ON SLOT AT LOW Z
                  jobs[global_idx].target_z = 0.05; 
             } else {
-                 jobs[global_idx].target_z = z_mission; 
+                 // Going to charge (Transit) -> APPROACH HEIGHT 0.5
+                 // Safe but distinct from ground
+                 jobs[global_idx].target_z = 0.5; 
             }
         }
 
-        std::vector<std::pair<std::string, std::vector<crazyflie_interfaces::msg::Position>>> new_commands(num_drones);
+        // C. Process WAITING DRONES
+        for (const std::string& id : waiting_drones) {
+            auto it = std::find(droneIds_.begin(), droneIds_.end(), id);
+            size_t global_idx = std::distance(droneIds_.begin(), it);
+            jobs[global_idx].id = id;
+            jobs[global_idx].is_assigned = true; 
+            // Hover at current position
+            jobs[global_idx].target_pos = local_poses[id].pose.position;
+            jobs[global_idx].target_z = z_mission;
+        }
 
-        #pragma omp parallel for
-        for (size_t i = 0; i < num_drones; ++i) {
-            const auto& job = jobs[i];
+        std::vector<std::pair<std::string, std::vector<crazyflie_interfaces::msg::Position>>> new_commands(droneIds_.size());
+
+        // Compute paths for assigned jobs
+        for (int i = 0; i < (int)droneIds_.size(); ++i) {
+            std::string id = droneIds_[i];
+            
+            // NOTE: We now generate commands for EVERYONE, including charging drones (to hold position)
+            // So no continue skip here.
+            
+            DroneJob& job = jobs[i];
             auto current_pos = local_poses[job.id].pose.position;
             std::vector<crazyflie_interfaces::msg::Position> drone_path_cmds;
 
@@ -940,8 +1005,10 @@ private:
                  drone_path_cmds.push_back(cmd);
             } else {
                  // Plan path to the shadow spot to avoid obstacles
-                 auto path = runPlanningPipeline(local_grid, job.target_pos, current_pos);
+                 // Run A* Pipeline with explicit Z
+                 auto path = runPlanningPipeline(local_grid, job.target_pos, current_pos, job.target_z);
                  
+                 // Smoothing / Post-Processing (omitted for brevity, assume path is usable)
                  if (!path.empty()) {
                     for (size_t k = 0; k < path.size(); ++k) {
                         crazyflie_interfaces::msg::Position cmd;
@@ -1086,8 +1153,8 @@ private:
                 pub_it->second->publish(safe_cmd);
             }
         }
-    }
-};
+    } // end publishCommands
+}; // end SwarmPlanner
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
