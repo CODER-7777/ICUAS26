@@ -1044,7 +1044,8 @@ private:
         // TUNING PARAMETERS
         double safe_radius = 0.7; // Meters (Trigger distance)
         double gain = 1.2;        // Strength of the push
-        
+        const double MAX_REPULSION_STEP = 1.0; // CLAMP: Max 1m shift per step
+
         double dx_rep = 0.0;
         double dy_rep = 0.0;
         bool avoidance_active = false;
@@ -1075,6 +1076,13 @@ private:
         }
 
         if (avoidance_active) {
+            // CLAMPING LOGIC
+            double rep_mag = std::hypot(dx_rep, dy_rep);
+            if (rep_mag > MAX_REPULSION_STEP) {
+                dx_rep = (dx_rep / rep_mag) * MAX_REPULSION_STEP;
+                dy_rep = (dy_rep / rep_mag) * MAX_REPULSION_STEP;
+            }
+
             target.x += dx_rep;
             target.y += dy_rep;
         }
