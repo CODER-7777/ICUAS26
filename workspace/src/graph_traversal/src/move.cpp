@@ -47,7 +47,7 @@ struct AStarNode {
     bool operator>(const AStarNode& other) const { return f_score > other.f_score; }
 };
 
-enum class SwarmState { TAKEOFF, MISSION };
+enum class SwarmState { TAKEOFF, MISSION, RETURN_TO_HOME };
 
 class SwarmPlanner : public rclcpp::Node {
 public:
@@ -85,6 +85,12 @@ public:
                 [this, id](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
                     std::lock_guard<std::mutex> lock(data_mutex_);
                     this->swarm_poses_[id] = *msg;
+                    // Capture Initial Pose
+                    if (this->initial_poses_.find(id) == this->initial_poses_.end()) {
+                        this->initial_poses_[id] = msg->pose.position;
+                        RCLCPP_INFO(this->get_logger(), "🏠 Captured Home Position for %s: (%.2f, %.2f, %.2f)", 
+                            id.c_str(), msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+                    }
                 }, sub_opt));
 
             cmd_pubs_[id] = this->create_publisher<crazyflie_interfaces::msg::Position>(
@@ -163,6 +169,7 @@ private:
     std::map<std::string, geometry_msgs::msg::PoseStamped> swarm_poses_;
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
+    std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
 
     // --- BMS Members ---
     std::map<std::string, DroneBatteryState> battery_states_;
@@ -548,6 +555,8 @@ private:
             handleTakeoff();
         } else if (current_state_ == SwarmState::MISSION) {
             handleMission();
+        } else if (current_state_ == SwarmState::RETURN_TO_HOME) {
+            handleReturnToHome();
         }
     }
 
@@ -781,6 +790,24 @@ private:
                  state.is_going_to_charge = false;
                  state.has_charged = true; 
              }
+        }
+
+        // --- GLOBAL BATTERY EMERGENCY CHECK ---
+        bool emergency_rth = false;
+        {
+             std::lock_guard<std::mutex> lock(data_mutex_);
+             for(const auto& id : droneIds_) {
+                 if (battery_states_[id].percentage < 95.0) {
+                     emergency_rth = true;
+                     RCLCPP_ERROR(this->get_logger(), "🚨 EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 95%%)", 
+                         id.c_str(), battery_states_[id].percentage);
+                 }
+             }
+        }
+
+        if (emergency_rth) {
+            current_state_ = SwarmState::RETURN_TO_HOME;
+            return; // Switch immediately
         }
         
         const size_t num_avail = available_drones.size();
@@ -1047,6 +1074,84 @@ private:
         }
     }
 
+    void handleReturnToHome() {
+        // Simple logic: Plan path from current pos to initial_pos for ALL drones
+        // No matching needed. Everyone goes home.
+        
+        nav_msgs::msg::OccupancyGrid local_grid;
+        std::map<std::string, geometry_msgs::msg::PoseStamped> local_poses;
+        std::map<std::string, geometry_msgs::msg::Point> home_poses;
+
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            local_grid = cached_grid_;
+            local_poses = swarm_poses_;
+            home_poses = initial_poses_;
+        }
+
+        std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> new_commands;
+        double z_safe = 1.0; // Fly home at safe height
+
+        // 1. Generate Commands
+        #pragma omp parallel for
+        for (int i = 0; i < (int)droneIds_.size(); ++i) {
+            std::string id = droneIds_[i];
+            
+            if (!home_poses.count(id)) continue; 
+            
+            auto current_pos = local_poses[id].pose.position;
+            auto target_pos = home_poses[id];
+            
+            // Check distance to home (2D)
+            double dist = std::hypot(current_pos.x - target_pos.x, current_pos.y - target_pos.y);
+            
+            std::vector<crazyflie_interfaces::msg::Position> cmd_list;
+
+            if (dist < 0.2) {
+                // ARRIVED AT HOME -> LAND (Ground Level)
+                crazyflie_interfaces::msg::Position cmd;
+                cmd.x = target_pos.x;
+                cmd.y = target_pos.y;
+                cmd.z = 0.05; // Practically ground
+                cmd.yaw = 0.0;
+                cmd_list.push_back(cmd);
+            } else {
+                // NAVIGATE TO HOME
+                auto path = runPlanningPipeline(local_grid, target_pos, current_pos, z_safe);
+                
+                if (!path.empty()) {
+                    for (size_t k = 0; k < path.size(); ++k) {
+                        crazyflie_interfaces::msg::Position cmd;
+                        cmd.x = path[k].x; cmd.y = path[k].y; cmd.z = z_safe;
+                        
+                        double dx, dy;
+                        if (k == 0) { dx = path[k].x - current_pos.x; dy = path[k].y - current_pos.y; }
+                        else { dx = path[k].x - path[k-1].x; dy = path[k].y - path[k-1].y; }
+                        
+                        if (std::hypot(dx, dy) > 0.01) cmd.yaw = std::atan2(dy, dx);
+                        else cmd.yaw = (cmd_list.empty()) ? 0.0 : cmd_list.back().yaw;
+                        
+                        cmd_list.push_back(cmd);
+                    }
+                } else {
+                    // Fallback: Hold current position
+                    crazyflie_interfaces::msg::Position cmd;
+                    cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = z_safe; cmd.yaw = 0.0;
+                    cmd_list.push_back(cmd);
+                }
+            }
+            
+            #pragma omp critical
+            new_commands[id] = cmd_list;
+        }
+
+        // 2. Commit
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            active_commands_ = new_commands;
+        }
+    }
+
     geometry_msgs::msg::Point applyRepulsion(
         geometry_msgs::msg::Point target,
         geometry_msgs::msg::Point current,
@@ -1054,7 +1159,9 @@ private:
         std::string my_id) 
     {
         // TUNING PARAMETERS
-        double safe_radius = 0.7; // Meters (Trigger distance)
+        // Dynamic Safe Radius: Standard 0.7m, but reduced during RTH to allow landing at close start points
+        double safe_radius = (current_state_ == SwarmState::RETURN_TO_HOME) ? 0.2 : 0.7; 
+        
         double gain = 1.2;        // Strength of the push
         const double MAX_REPULSION_STEP = 1.0; // CLAMP: Max 1m shift per step
 
@@ -1114,7 +1221,7 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            if (current_state_ != SwarmState::MISSION) return;
+            if (current_state_ != SwarmState::MISSION && current_state_ != SwarmState::RETURN_TO_HOME) return;
 
             // Snapshot Commands
             batch_buffer.reserve(active_commands_.size());
@@ -1162,6 +1269,7 @@ private:
                 crazyflie_interfaces::msg::Position safe_cmd = next_wp; // Copy yaw/z
                 safe_cmd.x = adjusted_pt.x;
                 safe_cmd.y = adjusted_pt.y;
+                safe_cmd.z = adjusted_pt.z; // Use clamped/repulsed Z
                 
                 pub_it->second->publish(safe_cmd);
             }
