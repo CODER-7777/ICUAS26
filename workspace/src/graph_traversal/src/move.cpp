@@ -13,6 +13,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <queue>
 #include <map>
@@ -21,8 +22,8 @@
 
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
-
 #include "utils.hpp"
+#include <std_msgs/msg/float64.hpp>
 
 using namespace std::chrono_literals;
 
@@ -67,8 +68,14 @@ public:
                 std::lock_guard<std::mutex> lock(data_mutex_);
                 current_bfsPoints_ = *msg;
                 hasPoints_ = true;
-                // Optional: Log when points change to verify updates
-                // RCLCPP_INFO(this->get_logger(), "Received %zu new targets", msg->poses.size());
+            }, sub_opt);
+
+        // 1b. z_target from bfs (height changes on AGV loop)
+        z_target_sub_ = this->create_subscription<std_msgs::msg::Float64>(
+            "/mission/z_target", 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                z_target_from_bfs_.store(msg->data);
+                has_z_target_ = true;
             }, sub_opt);
 
         // 2. Drone State Subscriptions
@@ -149,6 +156,10 @@ private:
     std::vector<std::string> droneIds_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> drone_subs_;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr dronePos_sub_;
+    std::atomic<double> z_target_from_bfs_{1.0};
+    std::atomic<bool> has_z_target_{false};
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr z_target_sub_;
+
     std::map<std::string, geometry_msgs::msg::PoseStamped> swarm_poses_;
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
@@ -264,7 +275,7 @@ private:
         if (!tree_) return nav_msgs::msg::OccupancyGrid();
         
         double res = tree_->getResolution();
-        double z = this->get_parameter("z_target").as_double();
+        double z = has_z_target_ ? z_target_from_bfs_.load() : this->get_parameter("z_target").as_double();
         double inflation_rad = this->get_parameter("inflation_radius").as_double();
         int inflation_steps = std::ceil(inflation_rad / res);
 
@@ -596,7 +607,7 @@ private:
         }
 
         bool all_up = true;
-        double z_target = this->get_parameter("z_target").as_double();
+        double z_target = has_z_target_ ? z_target_from_bfs_.load() : this->get_parameter("z_target").as_double();
         
         std::lock_guard<std::mutex> lock(data_mutex_); // Protect swarm_poses_
         for (const auto& id : droneIds_) {
@@ -652,6 +663,9 @@ private:
             local_targets = current_bfsPoints_; // If new points came in, we get them here
             local_poses = swarm_poses_;
         }
+
+        // z_mission from /mission/z_target topic (bfs publishes, updates on AGV loop)
+        const double z_mission = has_z_target_ ? z_target_from_bfs_.load() : this->get_parameter("z_target").as_double();
 
         const size_t num_drones = droneIds_.size();
         const size_t num_targets = local_targets.poses.size();
@@ -829,7 +843,6 @@ private:
         std::vector<DroneJob> jobs(num_drones); // We still need entries for ALL drones to process them
         // But we only fill "jobs" based on available list + special handling for charging
 
-        const double z_mission = this->get_parameter("z_target").as_double();
         
         // 4a. Build list of "Connection Anchors" (Base + Active Targets)
         std::vector<geometry_msgs::msg::Point> anchors;
