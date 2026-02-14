@@ -16,6 +16,9 @@
 #include <atomic>
 #include <cmath>
 
+#include "utils.hpp"
+#include <iostream>
+
 using namespace std::chrono_literals;
 
 struct idx { int i, j; };
@@ -26,10 +29,12 @@ public:
         // Parameters
         this->declare_parameter<double>("z_target", 1.0);
         this->declare_parameter<double>("inflation_radius", 0.3);
-        this->declare_parameter<double>("max_dist", 3.0);
+        this->declare_parameter<double>("max_dist", get_comm_range());
         this->declare_parameter<std::string>("csv_name", "path_log.csv");
         this->declare_parameter<std::string>("frame_id", "world");
-
+        // std::cout<<get_num_robots() << std::endl;
+        // std::cout<<get_charging_file() << std::endl;
+        // std::cout<<get_comm_range() << std::endl;
         callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
         
         auto sub_opt = rclcpp::SubscriptionOptions();

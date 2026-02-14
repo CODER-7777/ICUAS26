@@ -22,6 +22,8 @@
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
 
+#include "utils.hpp"
+
 using namespace std::chrono_literals;
 
 struct idx { int i, j; };
@@ -168,11 +170,8 @@ private:
 
     void initializeBMS() {
         // 1. Load Charging Area Parameters
-        this->declare_parameter("charging_area.upper_left", std::vector<double>{-1.0, 1.0});
-        this->declare_parameter("charging_area.down_right", std::vector<double>{1.0, -1.0});
-        
-        std::vector<double> ul = this->get_parameter("charging_area.upper_left").as_double_array();
-        std::vector<double> dr = this->get_parameter("charging_area.down_right").as_double_array();
+        std::vector<double> ul = charging_area_upper_left();
+        std::vector<double> dr = charging_area_down_right();
         
         // Compute Center
         double cx = 0.0, cy = 0.0;
