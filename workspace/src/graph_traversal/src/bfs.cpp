@@ -6,7 +6,6 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <std_msgs/msg/float64.hpp>
-#include <visualization_msgs/msg/marker.hpp>
 #include <octomap/octomap.h>
 #include <opencv2/opencv.hpp>
 #include <queue>
@@ -49,7 +48,6 @@ public:
 
         // Publishers
         path_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/drone/waypoint_array", 10);
-        marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("debug/path_marker", 10);
         z_target_pub_ = this->create_publisher<std_msgs::msg::Float64>("/mission/z_target", 10);
 
         // Service Client
@@ -90,7 +88,6 @@ private:
     rclcpp::CallbackGroup::SharedPtr callback_group_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr path_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr z_target_pub_;
     rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedPtr client_;
     rclcpp::TimerBase::SharedPtr init_timer_;
@@ -140,7 +137,7 @@ private:
 
         if (!path.empty()) {
             publishPoseArray(path);
-            publishMarkers(path);
+            // publishMarkers(path);
         }
 
         // Publish z_target so move.cpp can use it (params are node-local in ROS2)
@@ -193,28 +190,6 @@ private:
             array_msg.poses.push_back(p);
         }
         path_pub_->publish(array_msg);
-    }
-
-    void publishMarkers(const std::vector<geometry_msgs::msg::Point>& path) {
-        visualization_msgs::msg::Marker marker;
-        marker.header.frame_id = this->get_parameter("frame_id").as_string();
-        marker.header.stamp = this->now();
-        marker.ns = "drone_chain";
-        marker.id = 0;
-        marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-        marker.action = visualization_msgs::msg::Marker::ADD;
-        
-        marker.scale.x = 0.2; 
-        marker.scale.y = 0.2;
-        marker.scale.z = 0.2;
-        
-        marker.color.a = 1.0; 
-        marker.color.r = 1.0; 
-        marker.color.g = 0.0;
-        marker.color.b = 0.0;
-
-        marker.points = path;
-        marker_pub_->publish(marker);
     }
 
     std::vector<idx> bfs(idx start, idx end, const nav_msgs::msg::OccupancyGrid& map) {

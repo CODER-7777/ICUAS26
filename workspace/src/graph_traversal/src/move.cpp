@@ -19,7 +19,6 @@
 #include <map>
 #include <unordered_set>
 #include <omp.h>
-
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
 #include "utils.hpp"
@@ -93,7 +92,7 @@ public:
                     // Capture Initial Pose
                     if (this->initial_poses_.find(id) == this->initial_poses_.end()) {
                         this->initial_poses_[id] = msg->pose.position;
-                        RCLCPP_INFO(this->get_logger(), "🏠 Captured Home Position for %s: (%.2f, %.2f, %.2f)", 
+                        RCLCPP_INFO(this->get_logger(), "Captured Home Position for %s: (%.2f, %.2f, %.2f)", 
                             id.c_str(), msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
                     }
                 }, sub_opt));
@@ -585,7 +584,7 @@ private:
                 // DO NOT FREE SLOT YET - WAIT UNTIL CLEARED!
                 // state.assigned_slot remains valid
                 
-                RCLCPP_INFO(this->get_logger(), "🔋 Drone %s CHARGED. Low Takeoff (Z=0.5) & Clearing Area.", id.c_str());
+                RCLCPP_INFO(this->get_logger(), " Drone %s CHARGED. Low Takeoff (Z=0.5) & Clearing Area.", id.c_str());
             }
             return;
         }
@@ -599,7 +598,7 @@ private:
             double dist = std::hypot(current_pos.x - target.x, current_pos.y - target.y);
             
             if (dist < 0.1 && !state.is_charging) {
-                RCLCPP_INFO(this->get_logger(), "⬇️ Drone %s arrived at charging slot %d. 'Landing' to Z=0.05.", id.c_str(), state.assigned_slot);
+                RCLCPP_INFO(this->get_logger(), "Drone %s arrived at charging slot %d. 'Landing' to Z=0.05.", id.c_str(), state.assigned_slot);
                 
                 // NO LAND SERVICE - Just state switch + Z command
                 state.is_charging = true;
@@ -663,7 +662,7 @@ private:
                     double current_z = this->get_parameter("z_target").as_double();
                     this->set_parameter(rclcpp::Parameter("z_target", current_z + HEIGHT_BOOST));
                     RCLCPP_INFO(this->get_logger(), 
-                        "🔄 AGV Loop %d completed! Raising altitude to %.1f m", 
+                        "AGV Loop %d completed! Raising altitude to %.1f m", 
                         agv_loop_count_, current_z + HEIGHT_BOOST);
                 }
             }
@@ -726,7 +725,7 @@ private:
                              battery_states_[id].assigned_slot = free_slot;
                              battery_states_[id].start_charge_percentage = battery_states_[id].percentage;
                              slot_occupied_[free_slot] = true;
-                             RCLCPP_WARN(this->get_logger(), "🪫 Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
+                             RCLCPP_WARN(this->get_logger(), " Drone %s Low Battery (%.1f%%). Sending to Charge Slot %d.", 
                                 id.c_str(), battery_states_[id].percentage, free_slot);
                              
                              charging_drones.push_back(id);
@@ -781,12 +780,12 @@ private:
                  
                  // If was on ground charging, TAKE OFF (Virtual)
                  if (state.is_charging) {
-                    RCLCPP_WARN(this->get_logger(), "🚨 RECALLING Drone %s (%.1f%%) from charging for MISSION!", 
+                    RCLCPP_WARN(this->get_logger(), "RECALLING Drone %s (%.1f%%) from charging for MISSION!", 
                         recall_id.c_str(), state.percentage);
                     // No Service call needed, just state change.
                     // Loop will pick up Z=Mission Height next cycle.
                  } else {
-                    RCLCPP_INFO(this->get_logger(), "↩️ Redirecting Drone %s (%.1f%%) from charging approach to MISSION.", 
+                    RCLCPP_INFO(this->get_logger(), "Redirecting Drone %s (%.1f%%) from charging approach to MISSION.", 
                         recall_id.c_str(), state.percentage);
                  }
 
@@ -808,7 +807,7 @@ private:
              for(const auto& id : droneIds_) {
                  if (battery_states_[id].percentage < 25.0) {
                      emergency_rth = true;
-                     RCLCPP_ERROR(this->get_logger(), "🚨 EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 25%%)", 
+                     RCLCPP_ERROR(this->get_logger(), "EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 25%%)", 
                          id.c_str(), battery_states_[id].percentage);
                  }
              }
@@ -968,12 +967,12 @@ private:
                          int s = battery_states_[id].assigned_slot;
                          if (s >= 0 && s < (int)slot_occupied_.size()) {
                              slot_occupied_[s] = false;
-                             RCLCPP_INFO(this->get_logger(), "🕊️ Slot %d freed by %s (Cleared dist=%.2fm)", s, id.c_str(), dist_from_center);
+                             RCLCPP_INFO(this->get_logger(), " Slot %d freed by %s (Cleared dist=%.2fm)", s, id.c_str(), dist_from_center);
                          }
                          battery_states_[id].assigned_slot = -1;
                      }
                      // Drone will become available next cycle
-                     RCLCPP_INFO(this->get_logger(), "✅ Drone %s Cleared Charging Area.", id.c_str());
+                     RCLCPP_INFO(this->get_logger(), "Drone %s Cleared Charging Area.", id.c_str());
                      
                      // Current cycle: Just Hover where it is (or move to safe spot)
                      // It's effectively free now.
@@ -1154,7 +1153,7 @@ private:
                             // Only if I am the current one (double check)
                             if (i == rth_index_) {
                                 rth_index_++;
-                                RCLCPP_INFO(this->get_logger(), "✅ Drone %s Landed. Next!", id.c_str());
+                                RCLCPP_INFO(this->get_logger(), "Drone %s Landed. Next!", id.c_str());
                             }
                         }
                     }
@@ -1199,7 +1198,7 @@ private:
         // If all drones have completed sequential return (rth_index_ has passed the last index)
         if (rth_index_ >= (int)droneIds_.size()) {
             if (!landing_service_called_) {
-                RCLCPP_INFO(this->get_logger(), "🏁 All drones at home position (Z=0.05). Triggering Final Land Service for ALL.");
+                RCLCPP_INFO(this->get_logger(), "All drones at home position (Z=0.05). Triggering Final Land Service for ALL.");
                 
                 // Call Land Service for everyone
                 for (const auto& id : droneIds_) {
