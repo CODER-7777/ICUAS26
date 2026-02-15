@@ -25,10 +25,10 @@
  #include <unordered_set>
  #include <vector>
  
-//  // ============================================================
-//  // GROUND TRUTH DATA (Extracted from Gazebo World XML)
-//  // format: id -> (x, y, z)
-//  // ============================================================
+ // ============================================================
+ // GROUND TRUTH DATA (Extracted from Gazebo World XML)
+ // format: id -> (x, y, z)
+ // ============================================================
 //  static const std::map<int, std::tuple<double, double, double>> GROUND_TRUTH{
 //      {11, {-5.9245, -1.3903, 2.0560}}, {14, {7.6041, 2.8089, 2.3750}},
 //      {16, {-3.8641, 6.9430, 1.7940}},  {19, {4.8932, -4.3532, 1.7024}},
@@ -45,6 +45,8 @@
 //      {26, {-2.1589, 7.1959, 1.2590}},  {22, {-8.6736, 4.2784, 0.5363}},
 //      {7, {0.7506, -3.8684, 2.2749}},   {27, {-8.8289, 4.4761, 1.4376}},
 //  };
+
+
  
  // ============================================================
  // PER-DRONE CONTEXT
@@ -273,10 +275,17 @@
      auto now = this->now();
 
      // When RTH is active: publish last averaged value for ALL detected markers
+     // in ascending marker ID order (same as logging order)
      if (rth_active_.load()) {
+       std::vector<int> marker_ids;
+       for (const auto &[mid, agg] : marker_detections_) {
+         if (!agg.detections.empty()) marker_ids.push_back(mid);
+       }
+       std::sort(marker_ids.begin(), marker_ids.end());
+
        size_t count = 0;
-       for (auto &[marker_id, agg] : marker_detections_) {
-         if (agg.detections.empty()) continue;
+       for (int marker_id : marker_ids) {
+         auto &agg = marker_detections_[marker_id];
          double ax, ay, az;
          if (agg.has_last_avg) {
            ax = agg.last_avg_x;
@@ -314,8 +323,8 @@
         //    err_msg = " | Error: GT Not Found";
         //  }
          RCLCPP_INFO(this->get_logger(),
-                     "RTH: Marker %d avg @ (%.2f, %.2f, %.2f)",
-                     marker_id, ax, ay, az);
+                     "RTH: Marker %d avg @ (%.2f, %.2f, %.2f)%s",
+                     marker_id, ax, ay, az, err_msg.c_str());
        }
        if (count > 0) {
          RCLCPP_INFO(this->get_logger(),
