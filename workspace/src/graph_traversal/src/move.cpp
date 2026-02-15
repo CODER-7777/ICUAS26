@@ -643,7 +643,7 @@ private:
                 );
                 
                 // Must move away first (at least 3m from start)
-                if (!agv_away_from_start_ && dist_to_start > 3.0) {
+                if (!agv_away_from_start_ && dist_to_start > get_comm_range()) {
                     agv_away_from_start_ = true;
                     RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
                 }
