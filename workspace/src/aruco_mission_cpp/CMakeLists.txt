@@ -14,6 +14,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(icuas25_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -27,6 +28,7 @@ ament_target_dependencies(aruco_mission_node
   cv_bridge
   image_transport
   icuas25_msgs
+  std_msgs
   tf2
   tf2_geometry_msgs
 )

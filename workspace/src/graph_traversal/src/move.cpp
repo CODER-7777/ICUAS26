@@ -23,6 +23,7 @@
 #include <crazyflie_interfaces/srv/land.hpp>
 #include "utils.hpp"
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 using namespace std::chrono_literals;
 
@@ -122,6 +123,9 @@ public:
         octomap_client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary", 
             rmw_qos_profile_services_default, callback_group_);
         
+        // RTH state publisher (true when Return-To-Home active)
+        rth_state_pub_ = this->create_publisher<std_msgs::msg::Bool>("RTH_STATE", 10);
+        
 
 
         // 4. Timers
@@ -173,6 +177,7 @@ private:
     std::map<std::string, geometry_msgs::msg::PoseStamped> swarm_poses_;
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr rth_state_pub_;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
     int rth_index_ = 0; // NEW: Track which drone is returning
     bool landing_service_called_ = false; // Flag to ensure landing service is called only once
@@ -570,6 +575,11 @@ private:
         } else if (current_state_ == SwarmState::RETURN_TO_HOME) {
             handleReturnToHome();
         }
+
+        // Publish RTH state (true when Return-To-Home active)
+        std_msgs::msg::Bool rth_msg;
+        rth_msg.data = (current_state_ == SwarmState::RETURN_TO_HOME);
+        rth_state_pub_->publish(rth_msg);
     }
 
     void handleBatteryLogic(const std::string& id) {
@@ -809,7 +819,7 @@ private:
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
              for(const auto& id : droneIds_) {
-                 if (battery_states_[id].percentage < 95.0) {
+                 if (battery_states_[id].percentage < 25.0) {
                      emergency_rth = true;
                      RCLCPP_ERROR(this->get_logger(), "EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 25%%)", 
                          id.c_str(), battery_states_[id].percentage);
