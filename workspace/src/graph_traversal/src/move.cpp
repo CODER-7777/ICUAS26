@@ -54,6 +54,7 @@ public:
     SwarmPlanner() : Node("Swarm_planner") {
         this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
+        this->declare_parameter<double>("max_speed", 10.0);  // m/s - speed limit for position commands
         current_state_ = SwarmState::TAKEOFF;
         int N = get_num_robots();
         for (int i=1;i<=N;i++){
@@ -1306,7 +1307,23 @@ private:
                     item.id
                 );
 
-                // 3. Publish the Adjusted Command
+                // 3. SPEED LIMIT: interpolate toward target so step <= max_speed * dt
+                double max_speed = this->get_parameter("max_speed").as_double();
+                const double dt = 0.05;  // 50ms control loop
+                const auto& current = current_positions[item.id];
+                double dx = adjusted_pt.x - current.x;
+                double dy = adjusted_pt.y - current.y;
+                double dz = adjusted_pt.z - current.z;
+                double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                double max_step = max_speed * dt;
+                if (dist > max_step && dist > 1e-6) {
+                    double scale = max_step / dist;
+                    adjusted_pt.x = current.x + dx * scale;
+                    adjusted_pt.y = current.y + dy * scale;
+                    adjusted_pt.z = current.z + dz * scale;
+                }
+
+                // 4. Publish the Adjusted Command
                 crazyflie_interfaces::msg::Position safe_cmd = next_wp; // Copy yaw/z
                 safe_cmd.x = adjusted_pt.x;
                 safe_cmd.y = adjusted_pt.y;
