@@ -54,7 +54,7 @@ public:
     SwarmPlanner() : Node("Swarm_planner") {
         this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
-        this->declare_parameter<double>("max_speed", 10.0);  // m/s - speed limit for position commands
+        this->declare_parameter<double>("max_speed", 12.0);  // m/s - speed limit for position commands
         current_state_ = SwarmState::TAKEOFF;
         int N = get_num_robots();
         for (int i=1;i<=N;i++){
@@ -176,6 +176,8 @@ private:
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
     int rth_index_ = 0; // NEW: Track which drone is returning
+    bool landing_service_called_ = false; // Flag to ensure landing service is called only once
+
 
 
     // --- BMS Members ---
@@ -1192,6 +1194,27 @@ private:
             std::lock_guard<std::mutex> lock(data_mutex_);
             active_commands_ = new_commands;
         }
+
+        // 3. Final Landing Check
+        // If all drones have completed sequential return (rth_index_ has passed the last index)
+        if (rth_index_ >= (int)droneIds_.size()) {
+            if (!landing_service_called_) {
+                RCLCPP_INFO(this->get_logger(), "🏁 All drones at home position (Z=0.05). Triggering Final Land Service for ALL.");
+                
+                // Call Land Service for everyone
+                for (const auto& id : droneIds_) {
+                    auto client = land_clients_[id];
+                    if (client->service_is_ready()) {
+                        auto req = std::make_shared<crazyflie_interfaces::srv::Land::Request>();
+                        req->height = 0.0; // Land on ground
+                        req->duration.sec = 2; // Duration for landing
+                        client->async_send_request(req);
+                        RCLCPP_INFO(this->get_logger(), "🛬 Called Land Service for %s", id.c_str());
+                    }
+                }
+                landing_service_called_ = true;
+            }
+        }
     }
 
     geometry_msgs::msg::Point applyRepulsion(
@@ -1202,7 +1225,7 @@ private:
     {
         // TUNING PARAMETERS
         // Dynamic Safe Radius: Standard 0.7m, but reduced during RTH to allow landing at close start points
-        double safe_radius = (current_state_ == SwarmState::RETURN_TO_HOME) ? 0.2 : 0.7; 
+        double safe_radius = (current_state_ == SwarmState::RETURN_TO_HOME) ? 0.0 : 0.7; 
         
         double gain = 1.2;        // Strength of the push
         const double MAX_REPULSION_STEP = 1.0; // CLAMP: Max 1m shift per step
