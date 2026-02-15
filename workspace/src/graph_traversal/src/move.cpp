@@ -170,6 +170,8 @@ private:
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
+    int rth_index_ = 0; // NEW: Track which drone is returning
+
 
     // --- BMS Members ---
     std::map<std::string, DroneBatteryState> battery_states_;
@@ -797,9 +799,9 @@ private:
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
              for(const auto& id : droneIds_) {
-                 if (battery_states_[id].percentage < 95.0) {
+                 if (battery_states_[id].percentage < 25.0) {
                      emergency_rth = true;
-                     RCLCPP_ERROR(this->get_logger(), "🚨 EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 95%%)", 
+                     RCLCPP_ERROR(this->get_logger(), "🚨 EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 25%%)", 
                          id.c_str(), battery_states_[id].percentage);
                  }
              }
@@ -1075,8 +1077,7 @@ private:
     }
 
     void handleReturnToHome() {
-        // Simple logic: Plan path from current pos to initial_pos for ALL drones
-        // No matching needed. Everyone goes home.
+        // Sequential Logic: One by one return
         
         nav_msgs::msg::OccupancyGrid local_grid;
         std::map<std::string, geometry_msgs::msg::PoseStamped> local_poses;
@@ -1100,44 +1101,80 @@ private:
             if (!home_poses.count(id)) continue; 
             
             auto current_pos = local_poses[id].pose.position;
-            auto target_pos = home_poses[id];
-            
-            // Check distance to home (2D)
-            double dist = std::hypot(current_pos.x - target_pos.x, current_pos.y - target_pos.y);
+            auto home_pos = home_poses[id];
             
             std::vector<crazyflie_interfaces::msg::Position> cmd_list;
 
-            if (dist < 0.2) {
-                // ARRIVED AT HOME -> LAND (Ground Level)
+            // --- SEQUENTIAL LOGIC ---
+            if (i < rth_index_) {
+                // ALREADY LANDED -> STAY DOWN
                 crazyflie_interfaces::msg::Position cmd;
-                cmd.x = target_pos.x;
-                cmd.y = target_pos.y;
-                cmd.z = 0.05; // Practically ground
-                cmd.yaw = 0.0;
+                cmd.x = home_pos.x; cmd.y = home_pos.y; cmd.z = 0.05; cmd.yaw = 0.0;
                 cmd_list.push_back(cmd);
-            } else {
-                // NAVIGATE TO HOME
-                auto path = runPlanningPipeline(local_grid, target_pos, current_pos, z_safe);
+            } 
+            else if (i > rth_index_) {
+                 // WAITING -> HOVER IN PLACE
+                 crazyflie_interfaces::msg::Position cmd;
+                 cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = current_pos.z; cmd.yaw = 0.0;
+                 cmd_list.push_back(cmd);
+            }
+            else {
+                // ACTIVE DRONE (i == rth_index_) -> GO HOME
                 
-                if (!path.empty()) {
-                    for (size_t k = 0; k < path.size(); ++k) {
-                        crazyflie_interfaces::msg::Position cmd;
-                        cmd.x = path[k].x; cmd.y = path[k].y; cmd.z = z_safe;
-                        
-                        double dx, dy;
-                        if (k == 0) { dx = path[k].x - current_pos.x; dy = path[k].y - current_pos.y; }
-                        else { dx = path[k].x - path[k-1].x; dy = path[k].y - path[k-1].y; }
-                        
-                        if (std::hypot(dx, dy) > 0.01) cmd.yaw = std::atan2(dy, dx);
-                        else cmd.yaw = (cmd_list.empty()) ? 0.0 : cmd_list.back().yaw;
-                        
-                        cmd_list.push_back(cmd);
+                // Check distance to home (2D)
+                double dist = std::hypot(current_pos.x - home_pos.x, current_pos.y - home_pos.y);
+                
+                if (dist < 0.2) {
+                    // ARRIVED AT HOME -> LAND
+                    crazyflie_interfaces::msg::Position cmd;
+                    cmd.x = home_pos.x;
+                    cmd.y = home_pos.y;
+                    cmd.z = 0.05; // Land
+                    cmd.yaw = 0.0;
+                    cmd_list.push_back(cmd);
+                    
+                    // CHECK IF ACTUALLY LANDED (Z < 0.1)
+                    // We need to check this in the main thread (not parallel) or accept race condition?
+                    // Actually, we can just check here, but we can't increment rth_index_ inside parallel region easily without atomic or critical.
+                    // But since we only care about THIS drone (i == rth_index_), only one thread will hit this.
+                    
+                    if (current_pos.z < 0.15) {
+                        // Drone has landed. Move to next!
+                        // We'll update rth_index_ in the critical section below or separate step.
+                        // Let's mark it for update.
+                        #pragma omp critical
+                        {
+                            // Only if I am the current one (double check)
+                            if (i == rth_index_) {
+                                rth_index_++;
+                                RCLCPP_INFO(this->get_logger(), "✅ Drone %s Landed. Next!", id.c_str());
+                            }
+                        }
                     }
                 } else {
-                    // Fallback: Hold current position
-                    crazyflie_interfaces::msg::Position cmd;
-                    cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = z_safe; cmd.yaw = 0.0;
-                    cmd_list.push_back(cmd);
+                    // NAVIGATE TO HOME
+                    auto path = runPlanningPipeline(local_grid, home_pos, current_pos, z_safe);
+                    
+                    if (!path.empty()) {
+                        for (size_t k = 0; k < path.size(); ++k) {
+                            crazyflie_interfaces::msg::Position cmd;
+                            cmd.x = path[k].x; cmd.y = path[k].y; cmd.z = z_safe;
+                            
+                            double dx, dy;
+                            if (k == 0) { dx = path[k].x - current_pos.x; dy = path[k].y - current_pos.y; }
+                            else { dx = path[k].x - path[k-1].x; dy = path[k].y - path[k-1].y; }
+                            
+                            if (std::hypot(dx, dy) > 0.01) cmd.yaw = std::atan2(dy, dx);
+                            else cmd.yaw = (cmd_list.empty()) ? 0.0 : cmd_list.back().yaw;
+                            
+                            cmd_list.push_back(cmd);
+                        }
+                    } else {
+                        // Fallback: Hold current position
+                        crazyflie_interfaces::msg::Position cmd;
+                        cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = z_safe; cmd.yaw = 0.0;
+                        cmd_list.push_back(cmd);
+                    }
                 }
             }
             
