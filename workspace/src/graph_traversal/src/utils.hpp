@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-std::string get_num_robots(); 
+int get_num_robots(); 
 std::string get_charging_file();
 double get_comm_range();
 

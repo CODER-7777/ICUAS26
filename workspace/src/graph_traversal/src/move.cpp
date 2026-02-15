@@ -55,6 +55,10 @@ public:
         this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
         current_state_ = SwarmState::TAKEOFF;
+        int N = get_num_robots();
+        for (int i=1;i<=N;i++){
+            droneIds_.push_back("cf_"+std::to_string(i));
+        }
 
         // Create a Reentrant Callback Group to allow parallelism
         callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -159,7 +163,7 @@ private:
     bool agv_away_from_start_ = false;  // Must move away before loop can be counted
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
 
-    std::vector<std::string> droneIds_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
+    std::vector<std::string> droneIds_;
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> drone_subs_;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr dronePos_sub_;
     std::atomic<double> z_target_from_bfs_{1.0};
