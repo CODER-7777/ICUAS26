@@ -3,12 +3,12 @@
 #include <yaml-cpp/yaml.h>
 
 
-std::string get_num_robots() {
+int get_num_robots() {
     const char* env_p = std::getenv("NUM_ROBOTS");
     if (env_p) {
-        return std::string(env_p);
+        return std::stoi(env_p);
     } else {
-        return "5";
+        return 5;
     }
 }
 

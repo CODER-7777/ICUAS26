@@ -12,7 +12,6 @@
 #include <queue>
 #include <vector>
 #include <mutex>
-#include <fstream>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -31,7 +30,6 @@ public:
         this->declare_parameter<double>("z_target", 1.0);
         this->declare_parameter<double>("inflation_radius", 0.3);
         this->declare_parameter<double>("max_dist", get_comm_range());
-        this->declare_parameter<std::string>("csv_name", "path_log.csv");
         this->declare_parameter<std::string>("frame_id", "world");
         // std::cout<<get_num_robots() << std::endl;
         // std::cout<<get_charging_file() << std::endl;
@@ -69,10 +67,6 @@ public:
         // 5Hz Control Loop
         timer_ = this->create_wall_timer(100ms, std::bind(&OctomapBFSPlanner::timerLoop, this), callback_group_);
 
-        csv_file_.open(this->get_parameter("csv_name").as_string());
-        if (csv_file_.is_open()) {
-            csv_file_ << "timestamp,agv_x,agv_y,drone_points\n";
-        }
 
         is_planning_ = false;
         RCLCPP_INFO(this->get_logger(), "Planner Online. Publishing to /drone/waypoint_array");
@@ -92,7 +86,6 @@ private:
     geometry_msgs::msg::Point agv_start_pos_;
     bool agv_start_captured_ = false;
     bool agv_away_from_start_ = false;
-    std::ofstream csv_file_;
     
     rclcpp::CallbackGroup::SharedPtr callback_group_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
@@ -148,7 +141,6 @@ private:
         if (!path.empty()) {
             publishPoseArray(path);
             publishMarkers(path);
-            logToCSV(path, target);
         }
 
         // Publish z_target so move.cpp can use it (params are node-local in ROS2)
@@ -223,18 +215,6 @@ private:
 
         marker.points = path;
         marker_pub_->publish(marker);
-    }
-
-    void logToCSV(const std::vector<geometry_msgs::msg::Point>& path, const geometry_msgs::msg::Point& target) {
-        if (csv_file_.is_open()) {
-            double ts = this->now().seconds();
-            csv_file_ << ts << "," << target.x << "," << target.y << ",";
-            for (size_t i = 0; i < path.size(); ++i) {
-                csv_file_ << path[i].x << ";" << path[i].y << (i == path.size() - 1 ? "" : "|");
-            }
-            csv_file_ << "\n";
-            csv_file_.flush();
-        }
     }
 
     std::vector<idx> bfs(idx start, idx end, const nav_msgs::msg::OccupancyGrid& map) {

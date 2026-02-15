@@ -54,7 +54,12 @@ public:
     SwarmPlanner() : Node("Swarm_planner") {
         this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
+        this->declare_parameter<double>("max_speed", 10.0);  // m/s - speed limit for position commands
         current_state_ = SwarmState::TAKEOFF;
+        int N = get_num_robots();
+        for (int i=1;i<=N;i++){
+            droneIds_.push_back("cf_"+std::to_string(i));
+        }
 
         // Create a Reentrant Callback Group to allow parallelism
         callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -159,7 +164,7 @@ private:
     bool agv_away_from_start_ = false;  // Must move away before loop can be counted
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
 
-    std::vector<std::string> droneIds_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
+    std::vector<std::string> droneIds_;
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> drone_subs_;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr dronePos_sub_;
     std::atomic<double> z_target_from_bfs_{1.0};
@@ -505,7 +510,7 @@ private:
         if (grid_path.empty()) return {};
 
         std::vector<geometry_msgs::msg::Point> drone_pts;
-        drone_pts.reserve(grid_path.size() / 5); 
+        drone_pts.reserve(grid_path.size() / get_num_robots()); 
 
         drone_pts.push_back(gToW(grid_path[0].i, grid_path[0].j));
 
@@ -643,7 +648,7 @@ private:
                 );
                 
                 // Must move away first (at least 3m from start)
-                if (!agv_away_from_start_ && dist_to_start > 3.0) {
+                if (!agv_away_from_start_ && dist_to_start > get_comm_range()) {
                     agv_away_from_start_ = true;
                     RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
                 }
@@ -1302,7 +1307,23 @@ private:
                     item.id
                 );
 
-                // 3. Publish the Adjusted Command
+                // 3. SPEED LIMIT: interpolate toward target so step <= max_speed * dt
+                double max_speed = this->get_parameter("max_speed").as_double();
+                const double dt = 0.05;  // 50ms control loop
+                const auto& current = current_positions[item.id];
+                double dx = adjusted_pt.x - current.x;
+                double dy = adjusted_pt.y - current.y;
+                double dz = adjusted_pt.z - current.z;
+                double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                double max_step = max_speed * dt;
+                if (dist > max_step && dist > 1e-6) {
+                    double scale = max_step / dist;
+                    adjusted_pt.x = current.x + dx * scale;
+                    adjusted_pt.y = current.y + dy * scale;
+                    adjusted_pt.z = current.z + dz * scale;
+                }
+
+                // 4. Publish the Adjusted Command
                 crazyflie_interfaces::msg::Position safe_cmd = next_wp; // Copy yaw/z
                 safe_cmd.x = adjusted_pt.x;
                 safe_cmd.y = adjusted_pt.y;
