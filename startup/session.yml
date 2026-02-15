@@ -15,13 +15,15 @@ windows:
       layout: tiled
       panes:
         - waitForCfsGazebo;sleep 8;ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
-  - node_start:
+  - path_planning:  
       layout: tiled
       panes:
-        - waitForCfsGazebo;sleep 10;ros2 run octomap_map_generator waypoint_extractor_node
-  - target_found: 
-      layout: titled
+        - waitForCfsGazebo;sleep 10;ros2 run graph_traversal bfs 
+  - execution: 
+      layout: tiled
       panes:
-        - waitForCfsGazebo;sleep 12;ros2 topic echo /cf_1/target_found
-
- 
+        - waitForCfsGazebo;sleep 12;ros2 run graph_traversal move
+  - aruco_mission:
+      layout: tiled
+      panes:
+        - waitForCfsGazebo;sleep 12; ros2 run aruco_mission_cpp aruco_mission_node
