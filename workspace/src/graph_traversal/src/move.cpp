@@ -510,7 +510,7 @@ private:
         if (grid_path.empty()) return {};
 
         std::vector<geometry_msgs::msg::Point> drone_pts;
-        drone_pts.reserve(grid_path.size() / 5); 
+        drone_pts.reserve(grid_path.size() / get_num_robots()); 
 
         drone_pts.push_back(gToW(grid_path[0].i, grid_path[0].j));
 
