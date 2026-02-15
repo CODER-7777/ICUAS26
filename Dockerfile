@@ -183,7 +183,8 @@ COPY to_copy/AttitudeSetpoint.msg $HOME/ros2_ws/src/crazyswarm2/crazyflie_interf
 
 # MY CHANGES
 RUN rm $HOME/ros2_ws/src/icuas26_competition/startup/session.yml 
-COPY startup/restart.sh $HOME/ros2_ws/src/icuas26_competition/startup/
+RUN rm $HOME/ros2_ws/src/icuas26_competition/startup/start.sh
+COPY startup/start.sh $HOME/ros2_ws/src/icuas26_competition/startup/
 COPY startup/session.yml $HOME/ros2_ws/src/icuas26_competition/startup/
 WORKDIR $HOME/ros2_ws
 
