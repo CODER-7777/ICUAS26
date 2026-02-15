@@ -176,6 +176,10 @@ private:
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
     int rth_index_ = 0; // NEW: Track which drone is returning
     bool landing_service_called_ = false; // Flag to ensure landing service is called only once
+    
+    // RTH Sorting Members
+    std::vector<std::string> rth_sorted_ids_;
+    bool rth_order_computed_ = false;
 
 
 
@@ -805,7 +809,7 @@ private:
         {
              std::lock_guard<std::mutex> lock(data_mutex_);
              for(const auto& id : droneIds_) {
-                 if (battery_states_[id].percentage < 25.0) {
+                 if (battery_states_[id].percentage < 95.0) {
                      emergency_rth = true;
                      RCLCPP_ERROR(this->get_logger(), "EMERGENCY RTH TRIGGERED! Drone %s Battery at %.1f%% (< 25%%)", 
                          id.c_str(), battery_states_[id].percentage);
@@ -1083,6 +1087,12 @@ private:
     }
 
     void handleReturnToHome() {
+        if (landing_service_called_) {
+             std::lock_guard<std::mutex> lock(data_mutex_);
+             active_commands_.clear();
+             return;
+        }
+
         // Sequential Logic: One by one return
         
         nav_msgs::msg::OccupancyGrid local_grid;
@@ -1099,10 +1109,29 @@ private:
         std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> new_commands;
         double z_safe = 1.0; // Fly home at safe height
 
+        // 0. Compute RTH Order (ONCE)
+        if (!rth_order_computed_) {
+             std::lock_guard<std::mutex> lock(data_mutex_);
+             rth_sorted_ids_ = droneIds_; // Start with default
+             
+             // Sort by Battery Percentage (Ascending: Lowest First)
+             std::sort(rth_sorted_ids_.begin(), rth_sorted_ids_.end(),
+                 [this](const std::string& a, const std::string& b) {
+                     return battery_states_[a].percentage < battery_states_[b].percentage;
+                 });
+                 
+             rth_order_computed_ = true;
+             
+             RCLCPP_INFO(this->get_logger(), "RTH Sequence Computed (Lowest Battery First):");
+             for(const auto& id : rth_sorted_ids_) {
+                 RCLCPP_INFO(this->get_logger(), " - %s (%.1f%%)", id.c_str(), battery_states_[id].percentage);
+             }
+        }
+
         // 1. Generate Commands
         #pragma omp parallel for
-        for (int i = 0; i < (int)droneIds_.size(); ++i) {
-            std::string id = droneIds_[i];
+        for (int i = 0; i < (int)rth_sorted_ids_.size(); ++i) {
+            std::string id = rth_sorted_ids_[i];
             
             if (!home_poses.count(id)) continue; 
             
