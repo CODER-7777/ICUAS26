@@ -235,11 +235,15 @@ RUN echo "export ROS_DOMAIN_ID=$(shuf -i 1-101 -n 1)" >> $HOME/.bashrc
 WORKDIR $HOME/ros2_ws
 
 # Final build of ROS2 ws 
-RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash;source $HOME/ros2_ws/install/setup.bash;colcon build --symlink-install --merge-install"
-RUN bash -c "colcon build --merge-install --packages-select aruco_mission"
-RUN bash -c "source /root/ros2_ws/install/setup.bash"
-RUN echo "ros2_ws" >> $HOME/.bashrc && \
-    echo "source_ros2" >> $HOME/.bashrc
+COPY ./workspace/src $HOME/workspace/src
+WORKDIR $HOME/workspace/
+RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && cd $HOME/ros2_ws && colcon build"
+RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && source $HOME/ros2_ws/install/setup.bash && colcon build"
+# RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash;source $HOME/ros2_ws/install/setup.bash;colcon build --symlink-install --merge-install"
+# RUN bash -c "colcon build --merge-install --packages-select aruco_mission"
+# RUN bash -c "source /root/ros2_ws/install/setup.bash"
+# RUN echo "ros2_ws" >> $HOME/.bashrc && \
+#     echo "source_ros2" >> $HOME/.bashrc
 
 WORKDIR $HOME
 COPY to_copy/aliases $HOME/.bash_aliases
