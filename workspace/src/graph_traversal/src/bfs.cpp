@@ -77,8 +77,8 @@ private:
     bool has_pose_ = false;
     std::shared_ptr<octomap::OcTree> tree_;
 
-    // Height boost after AGV loop completion (moved from move.cpp)
-    const double HEIGHT_BOOST = 1.0;
+    // Height step after AGV loop completion (set from map z_max when map loads)
+    std::atomic<double> z_step_{1.0};
     const double LOOP_DETECTION_RADIUS = 1.0;
     int agv_loop_count_ = 0;
     geometry_msgs::msg::Point agv_start_pos_;
@@ -127,9 +127,9 @@ private:
             agv_away_from_start_ = false;
             double current_z = this->get_parameter("z_target").as_double();
             double maxD = this->get_parameter("max_dist").as_double();
-            double new_z = std::min(current_z + HEIGHT_BOOST, maxD);
+            double new_z = std::min(current_z + z_step_.load(), maxD);
             this->set_parameter(rclcpp::Parameter("z_target", new_z));
-            RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.1f m (capped at max_dist)",
+            RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.2f m (capped at max_dist)",
                 agv_loop_count_, new_z);
         }
 
@@ -171,6 +171,23 @@ private:
 
         tree_.reset(dynamic_cast<octomap::OcTree*>(abs_tree));
         if (!tree_) return;
+
+        // Get map z extent and set initial z_target + z_step for ~13 min runtime
+        double minX, minY, minZ, maxX, maxY, maxZ;
+        tree_->getMetricMin(minX, minY, minZ);
+        tree_->getMetricMax(maxX, maxY, maxZ);
+        const double z_max = maxZ;
+        double initial_z;
+        if (z_max <= 10.0) {
+            initial_z = 1.0;
+            z_step_.store(1.0);
+        } else {
+            double step = z_max / 10.0;
+            initial_z = step;
+            z_step_.store(step);
+        }
+        this->set_parameter(rclcpp::Parameter("z_target", initial_z));
+        RCLCPP_INFO(this->get_logger(), "Map z_max=%.2f m: initial z_target=%.2f, z_step=%.2f", z_max, initial_z, z_step_.load());
 
         cached_grid_ = generateOccupancyGrid();
         map_ready_ = true;

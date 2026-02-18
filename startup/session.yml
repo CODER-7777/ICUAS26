@@ -11,19 +11,13 @@ windows:
         - waitForCfsGazebo;sleep 1;bash ./generate_gazebo_bridge_yaml.sh $NUM_ROBOTS; ros2 launch icuas26_competition system_launch.py
         - waitForCfsGazebo;sleep 3;ros2 launch icuas26_competition aruco_recognition.launch.py
         - waitForCfsGazebo;sleep 6;ros2 launch icuas26_competition octomap_server.launch.py
-  - clock_start:
+  - topic_pane:
       layout: tiled
       panes:
-        - waitForCfsGazebo;sleep 8;ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
-  - path_planning:  
+        - history -s "ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap cmd_vel:=/cf_1/cmd_vel"
+  - solution:
       layout: tiled
       panes:
         - waitForCfsGazebo;sleep 10;ros2 run graph_traversal bfs 
-  - execution: 
-      layout: tiled
-      panes:
         - waitForCfsGazebo;sleep 12;ros2 run graph_traversal move
-  - aruco_mission:
-      layout: tiled
-      panes:
-        - waitForCfsGazebo;sleep 12; ros2 run aruco_mission_cpp aruco_mission_node
+        - waitForCfsGazebo;sleep 14;ros2 run aruco_mission_cpp aruco_mission_node

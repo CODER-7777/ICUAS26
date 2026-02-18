@@ -125,7 +125,9 @@ public:
         
         // RTH state publisher (true when Return-To-Home active)
         rth_state_pub_ = this->create_publisher<std_msgs::msg::Bool>("RTH_STATE", 10);
-        
+
+        // Mission completion publisher: true when all drones have returned to base
+        mission_drone_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission_drone", 10);
 
 
         // 4. Timers
@@ -178,9 +180,11 @@ private:
     std::map<std::string, rclcpp::Publisher<crazyflie_interfaces::msg::Position>::SharedPtr> cmd_pubs_;
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr rth_state_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_drone_pub_;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
     int rth_index_ = 0; // NEW: Track which drone is returning
     bool landing_service_called_ = false; // Flag to ensure landing service is called only once
+    bool mission_drone_published_ = false; // Ensure /mission_drone is published only once
     
     // RTH Sorting Members
     std::vector<std::string> rth_sorted_ids_;
@@ -1251,6 +1255,15 @@ private:
                     }
                 }
                 landing_service_called_ = true;
+            }
+
+            // Publish mission completion once when all drones are back at base
+            if (!mission_drone_published_) {
+                std_msgs::msg::Bool mission_msg;
+                mission_msg.data = true;
+                mission_drone_pub_->publish(mission_msg);
+                mission_drone_published_ = true;
+                RCLCPP_INFO(this->get_logger(), "Published /mission_drone = true (all drones returned to base).");
             }
         }
     }
