@@ -97,8 +97,16 @@
      aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_5X5_250);
      aruco_params_ = cv::aruco::DetectorParameters::create();
  
+     rclcpp::QoS qos(rclcpp::KeepLast(100));
+     qos.reliable();
+     qos.transient_local();
+     qos.durability_volatile();
+
      target_found_pub_ =
-         this->create_publisher<icuas25_msgs::msg::TargetInfo>("/target_found", 10);
+          this->create_publisher<icuas25_msgs::msg::TargetInfo>(
+              "/target_found", qos);
+    //  target_found_pub_ =
+    //      this->create_publisher<icuas25_msgs::msg::TargetInfo>("/target_found", 10);
 
      rth_state_sub_ = this->create_subscription<std_msgs::msg::Bool>(
          "RTH_STATE", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
