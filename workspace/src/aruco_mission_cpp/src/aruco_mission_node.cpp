@@ -90,6 +90,7 @@
    MultiArucoDetector() : Node("multi_aruco_detector") {
      // Config
      marker_size_ = 0.25;
+     int N = get_num_robots();
      cf_ids_ = std::vector<std::string>;
      for (int i=1;i<=N;i++){
       cf_ids_.push_back("cf_"+std::to_string(i));
