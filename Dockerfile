@@ -242,8 +242,8 @@ RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && source $HOME/ros2_ws/i
 # RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash;source $HOME/ros2_ws/install/setup.bash;colcon build --symlink-install --merge-install"
 # RUN bash -c "colcon build --merge-install --packages-select aruco_mission"
 # RUN bash -c "source /root/ros2_ws/install/setup.bash"
-# RUN echo "ros2_ws" >> $HOME/.bashrc && \
-#     echo "source_ros2" >> $HOME/.bashrc
+RUN echo "ros2_ws" >> $HOME/.bashrc && \
+    echo "source_ros2" >> $HOME/.bashrc
 
 WORKDIR $HOME
 COPY to_copy/aliases $HOME/.bash_aliases
