@@ -127,7 +127,7 @@ public:
         rth_state_pub_ = this->create_publisher<std_msgs::msg::Bool>("RTH_STATE", 10);
 
         // Mission completion publisher: true when all drones have returned to base
-        mission_drone_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission_drone", 10);
+        mission_drone_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission_done", 10);
 
 
         // 4. Timers
