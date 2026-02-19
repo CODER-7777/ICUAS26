@@ -24,6 +24,7 @@
  #include <string>
  #include <unordered_set>
  #include <vector>
+ #include "utils.hpp"
  
  // ============================================================
  // GROUND TRUTH DATA (Extracted from Gazebo World XML)
@@ -89,7 +90,10 @@
    MultiArucoDetector() : Node("multi_aruco_detector") {
      // Config
      marker_size_ = 0.25;
-     cf_ids_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
+     cf_ids_ = std::vector<std::string>;
+     for (int i=1;i<=N;i++){
+      cf_ids_.push_back("cf_"+std::to_string(i));
+     }
      detection_timeout_ = 2.0; // seconds to wait for multi-drone detections
      outlier_threshold_ = 2.5; // standard deviations for outlier rejection
  
@@ -268,15 +272,15 @@
      double elapsed = (this->now() - agg.first_detection_time).seconds();
      if (elapsed > detection_timeout_)
        publishAveragedMarker(marker_id, agg);
-   }
+  rder)
+     if (rth_active_.load()) { }
  
    void checkAndPublishPendingMarkers() {
      std::lock_guard<std::mutex> lock(mutex_);
      auto now = this->now();
 
      // When RTH is active: publish last averaged value for ALL detected markers
-     // in ascending marker ID order (same as logging order)
-     if (rth_active_.load()) {
+     // in ascending marker ID order (same as logging o
        std::vector<int> marker_ids;
        for (const auto &[mid, agg] : marker_detections_) {
          if (!agg.detections.empty()) marker_ids.push_back(mid);
@@ -304,6 +308,9 @@
            ay = sy / n;
            az = sz / n;
          }
+         RCLCPP_INFO(this->get_logger(),
+         "RTH: Marker %d avg @ (%.2f, %.2f, %.2f)%s",
+         marker_id, ax, ay, az, err_msg.c_str());
          icuas25_msgs::msg::TargetInfo msg;
          msg.id = marker_id;
          msg.location.x = static_cast<float>(ax);
@@ -322,13 +329,10 @@
         //  } else {
         //    err_msg = " | Error: GT Not Found";
         //  }
-         RCLCPP_INFO(this->get_logger(),
-                     "RTH: Marker %d avg @ (%.2f, %.2f, %.2f)%s",
-                     marker_id, ax, ay, az, err_msg.c_str());
        }
        if (count > 0) {
          RCLCPP_INFO(this->get_logger(),
-                     "RTH: Published %zu marker(s) to /target_found", count);
+                   "RTH: Published %zu marker(s) to /target_found", count);
        }
        return;
      }
