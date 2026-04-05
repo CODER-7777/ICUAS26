@@ -1,6 +1,6 @@
 #!/bin/bash
 cd ~/workspace
-colcon build --packages-select aruco_mission_cpp graph_traversal
+colcon build --packages-select aruco_mission_cpp graph_traversal debug_logger
 source install/setup.bash 
 cd ~/ros2_ws/src/icuas26_competition/startup
 source _setup.sh
