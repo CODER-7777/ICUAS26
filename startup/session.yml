@@ -15,9 +15,14 @@ windows:
       layout: tiled
       panes:
         - history -s "ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap cmd_vel:=/cf_1/cmd_vel"
+        - waitForCfsGazebo;sleep 14;ros2 run graph_traversal prediction
   - solution:
       layout: tiled
       panes:
         - waitForCfsGazebo;sleep 10;ros2 run graph_traversal bfs 
         - waitForCfsGazebo;sleep 12;ros2 run graph_traversal move
         - waitForCfsGazebo;sleep 14;ros2 run aruco_mission_cpp aruco_mission_node
+  - debugging:
+      layout: tiled
+      panes:
+        - waitForCfsGazebo;sleep 16;ros2 run debug_logger debug_logger_node
