@@ -1,22 +1,23 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>graph_traversal</name>
+  <name>aruco_mission_cpp</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="shivangso23@iitk.ac.in">shivang</maintainer>
-  <license>TODO: License declaration</license>
+  <description>C++ ArUco multi-drone marker detection node (converted from Python)</description>
+  <maintainer email="soumyajh24@iitk.ac.in">soumya</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
-  <depend>octomap_msgs</depend>
-  <depend>octomap</depend> 
-  <depend>nav2_msgs</depend>
-  <depend>std_srvs</depend>
-  <depend>crazyflie_interfaces</depend>
   <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>icuas25_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 

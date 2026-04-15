@@ -8,12 +8,12 @@ XAUTH=/tmp/.docker.xauth
 echo "Preparing Xauthority data..."
 xauth_list=$(xauth nlist :0 | tail -n 1 | sed -e 's/^..../ffff/')
 if [ ! -f $XAUTH ]; then
-    if [ ! -z "$xauth_list" ]; then
-        echo $xauth_list | xauth -f $XAUTH nmerge -
-    else
-        touch $XAUTH
-    fi
-    chmod a+r $XAUTH
+  if [ ! -z "$xauth_list" ]; then
+    echo $xauth_list | xauth -f $XAUTH nmerge -
+  else
+    touch $XAUTH
+  fi
+  chmod a+r $XAUTH
 fi
 
 echo "Done."
@@ -34,17 +34,16 @@ REPO_ROOT=$(pwd)
 ln -sf $SSH_AUTH_SOCK ~/.ssh/ssh_auth_sock
 
 docker run -it \
-    --env="DISPLAY=$DISPLAY" \
-    --env="QT_X11_NO_MITSHM=1" \
-    --env="TERM=xterm-256color" \
-    --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-    --volume="/dev:/dev" \
-    --volume="/var/run/dbus/:/var/run/dbus/:z" \
-    --volume ~/.ssh/ssh_auth_sock:/ssh-agent \
-    --env SSH_AUTH_SOCK=/ssh-agent \
-    --net=host \
-    --privileged \
-    --volume="$REPO_ROOT/workspace/:/root/workspace/" \
-    --gpus '"all","capabilities=compute,utility,graphics"' \
-    --name crazysim_icuas_cont \
-    icuas
+  --env="DISPLAY=$DISPLAY" \
+  --env="QT_X11_NO_MITSHM=1" \
+  --env="TERM=xterm-256color" \
+  --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+  --volume="/dev:/dev" \
+  --volume="/var/run/dbus/:/var/run/dbus/:z" \
+  --volume ~/.ssh/ssh_auth_sock:/ssh-agent \
+  --env SSH_AUTH_SOCK=/ssh-agent \
+  --net=host \
+  --privileged \
+  --gpus '"all","capabilities=compute,utility,graphics"' \
+  --name crazysim_icuas_cont \
+  crazysim_icuas_img

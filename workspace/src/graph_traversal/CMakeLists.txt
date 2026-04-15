@@ -19,15 +19,24 @@ find_package(octomap_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
-add_executable(bfs src/bfs.cpp)
+add_executable(bfs src/bfs.cpp src/utils.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
-ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs)
+add_executable(move src/move.cpp src/utils.cpp)
+add_executable(prediction src/prediction.cpp)
+
+ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs std_msgs)
 ament_target_dependencies(occupancy  rclcpp octomap octomap_msgs nav2_msgs)
+ament_target_dependencies(move  rclcpp octomap octomap_msgs nav2_msgs std_msgs std_srvs crazyflie_interfaces sensor_msgs)
+ament_target_dependencies(prediction  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
 
 target_link_libraries(bfs
   ${OpenCV_LIBRARIES}
+  yaml-cpp
   octomap
 )
 
@@ -35,9 +44,26 @@ target_link_libraries(occupancy
   ${OpenCV_LIBRARIES}
   octomap
 )
+
+find_package(OpenMP REQUIRED)
+
+target_link_libraries(move
+  ${OpenCV_LIBRARIES}
+  octomap
+  yaml-cpp
+  OpenMP::OpenMP_CXX
+)
+
+target_link_libraries(prediction
+  ${OpenCV_LIBRARIES}
+  octomap
+)
+
 install(TARGETS
   bfs
   occupancy
+  move
+  prediction
   DESTINATION lib/${PROJECT_NAME})
 
 add_executable(octomap_processor src/octomap_processor.cpp)
