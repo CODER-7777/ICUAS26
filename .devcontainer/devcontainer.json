@@ -1,0 +1,34 @@
+{
+  "name": "CrazySim ICUAS Environment",
+  "image": "crazysim_icuas_img",
+  
+  "initializeCommand": "bash ./host_setup.sh",
+
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "QT_X11_NO_MITSHM": "1",
+    "TERM": "xterm-256color",
+    "SSH_AUTH_SOCK": "/ssh-agent",
+    "QT_QPA_PLATFORM": "xcb" 
+  },
+
+  "runArgs": [
+    "--net=host",
+    "--privileged",
+    "--gpus", "all,\"capabilities=compute,utility,graphics\"",
+    "--name=crazysim_icuas_cont" // <-- Add your custom name here!
+  ],
+
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+    "source=/dev,target=/dev,type=bind",
+    "source=/var/run/dbus,target=/var/run/dbus,type=bind",
+    "source=${localEnv:HOME}/.ssh/ssh_auth_sock,target=/ssh-agent,type=bind"
+  ],
+
+  "customizations": {
+    "jetbrains": {
+      "backend": "CLion"
+    }
+  }
+}
