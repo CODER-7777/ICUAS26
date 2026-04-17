@@ -39,9 +39,6 @@ target_link_libraries(connectivity_checker
   octomap
 )
 
-install(TARGETS slider_gui_node role_publisher octomap_publisher connectivity_checker
-  DESTINATION lib/${PROJECT_NAME}
-) 
 
 
 if(BUILD_TESTING)
