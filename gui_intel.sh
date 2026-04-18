@@ -1,6 +1,7 @@
 #!/bin/bash
 IMG=localhost/crazysim_icuas_img
 CMD=bash
+USER_NAME=shivang
 
 podman run --security-opt label=disable \
   --device=/dev/dri \
@@ -8,7 +9,7 @@ podman run --security-opt label=disable \
   -e DISPLAY \
   -e XAUTHORITY=$XAUTHORITY \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v $HOME/.local/share/JetBrains/:/root/.local/share/JetBrains \
+  -v $HOME/.local/share/JetBrains/:/home/$USER_NAME/.local/share/JetBrains \
   -v $HOME/.config/JetBrains/:/root/.config/JetBrains \
   -v $HOME/.cache/JetBrains/:/root/.cache/JetBrains \
   -v $PWD:/root/icuas26 \
@@ -19,5 +20,5 @@ podman run --security-opt label=disable \
   --userns=keep-id \
   --group-add keep-groups \
   --net host \
-  --rm \
+  --name icuas26 \
   -it $IMG $CMD
