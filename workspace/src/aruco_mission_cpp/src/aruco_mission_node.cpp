@@ -27,7 +27,7 @@
  
  // ============================================================
  // GROUND TRUTH DATA (Extracted from Gazebo World XML)
- // format: id -> (x, y, z) fefekj
+ // format: id -> (x, y, z)
  // ============================================================
 //  static const std::map<int, std::tuple<double, double, double>> GROUND_TRUTH{
 //      {11, {-5.9245, -1.3903, 2.0560}}, {14, {7.6041, 2.8089, 2.3750}},
