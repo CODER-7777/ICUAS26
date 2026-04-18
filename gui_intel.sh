@@ -1,7 +1,7 @@
 #!/bin/bash
 IMG=localhost/crazysim_icuas_img
 CMD=bash
-USER_NAME=shivang
+USER_NAME=$(whoami)
 
 podman run --security-opt label=disable \
   --device=/dev/dri \
@@ -13,6 +13,7 @@ podman run --security-opt label=disable \
   -v $HOME/.config/JetBrains/:/root/.config/JetBrains \
   -v $HOME/.cache/JetBrains/:/root/.cache/JetBrains \
   -v $PWD:/root/icuas26 \
+  -v $HOME/.ssh:/root/.ssh \
   -e WAYLAND_DISPLAY=$WAYLAND_DISPLAY \
   -e MESA_LOADER_DRIVER_OVERRIDE=iris \
   -e __GLX_VENDOR_LIBRARY_NAME=mesa \
