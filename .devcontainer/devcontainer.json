@@ -4,8 +4,8 @@
   
   "initializeCommand": "bash ./host_setup.sh",
 
-  "workspaceMount": "source=${localWorkspaceFolder}/workspace,target=/root/workspace,type=bind",
-  "workspaceFolder": "/root/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/root/icuas26_competition,type=bind",
+  "workspaceFolder": "/root/icuas26_competition",
 
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}",
