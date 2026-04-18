@@ -4,7 +4,7 @@
   
   "initializeCommand": "bash ./host_setup.sh",
 
-  "workspaceMount": "source=/home/soumya/Documents/Aerial_Robotics/icuas26_competition/workspace,target=/root/workspace,type=bind",
+  "workspaceMount": "source=${localWorkspaceFolder}/workspace,target=/root/workspace,type=bind",
   "workspaceFolder": "/root/workspace",
 
   "containerEnv": {
