@@ -4,6 +4,9 @@
   
   "initializeCommand": "bash ./host_setup.sh",
 
+  "workspaceMount": "source=/home/soumya/Documents/Aerial_Robotics/icuas26_competition/workspace,target=/root/workspace,type=bind",
+  "workspaceFolder": "/root/workspace",
+
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}",
     "QT_X11_NO_MITSHM": "1",
@@ -16,7 +19,7 @@
     "--net=host",
     "--privileged",
     "--gpus", "all,\"capabilities=compute,utility,graphics\"",
-    "--name=crazysim_icuas_cont" // <-- Add your custom name here!
+    "--name=crazysim_icuas_cont" 
   ],
 
   "mounts": [

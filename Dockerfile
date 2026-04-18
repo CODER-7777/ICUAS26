@@ -19,88 +19,88 @@ ARG HOME=/root
 
 # Tools useful during development
 RUN apt-get update \
- && apt install -y \
-        build-essential \
-        atop \
-        clang \
-        cmake \
-        cppcheck \
-        expect \
-        gdb \
-        git \
-        gnutls-bin \
-        libbluetooth-dev \
-        libccd-dev \
-        libcwiid-dev \
-        libfcl-dev \
-        libgoogle-glog-dev \
-        libspnav-dev \
-        libspdlog-dev \
-        libusb-dev \
-        libboost-thread-dev \
-        libboost-system-dev \
-        libboost-filesystem-dev \
-        libboost-regex-dev \
-        libboost-program-options-dev \
-        libconsole-bridge-dev \
-        libpoco-dev \
-        libtinyxml2-dev \
-        liblz4-dev \
-        libbz2-dev \
-        uuid-dev \
-        liblog4cxx-dev \
-        libgpgme-dev \
-        libgtest-dev \
-        python3-dbg \
-        python3-empy \
-        python3-numpy \
-        python3-setuptools \
-        python3-pip \
-        python3-venv \
-        python3-nose \
-        python3-pycryptodome \
-        python3-defusedxml \
-        python3-mock \
-        python3-netifaces \
-        python3-gnupg \
-        python3-psutil \
-        vim \
-        tmux \
-        tmuxinator \
-        nano \
-        net-tools \
-        iputils-ping \
-        xvfb \
-        curl\
-        jq\
-        wget\
-        ranger \
-        htop \
-        libgl1-mesa-glx \
-        libgl1-mesa-dri \
-        rfkill \
-        sudo \
-        usbutils \
-        software-properties-common \
-        mesa-utils \
- && add-apt-repository universe \
- && apt-get clean -qq
+  && apt install -y \
+  build-essential \
+  atop \
+  clang \
+  cmake \
+  cppcheck \
+  expect \
+  gdb \
+  git \
+  gnutls-bin \
+  libbluetooth-dev \
+  libccd-dev \
+  libcwiid-dev \
+  libfcl-dev \
+  libgoogle-glog-dev \
+  libspnav-dev \
+  libspdlog-dev \
+  libusb-dev \
+  libboost-thread-dev \
+  libboost-system-dev \
+  libboost-filesystem-dev \
+  libboost-regex-dev \
+  libboost-program-options-dev \
+  libconsole-bridge-dev \
+  libpoco-dev \
+  libtinyxml2-dev \
+  liblz4-dev \
+  libbz2-dev \
+  uuid-dev \
+  liblog4cxx-dev \
+  libgpgme-dev \
+  libgtest-dev \
+  python3-dbg \
+  python3-empy \
+  python3-numpy \
+  python3-setuptools \
+  python3-pip \
+  python3-venv \
+  python3-nose \
+  python3-pycryptodome \
+  python3-defusedxml \
+  python3-mock \
+  python3-netifaces \
+  python3-gnupg \
+  python3-psutil \
+  vim \
+  tmux \
+  tmuxinator \
+  nano \
+  net-tools \
+  iputils-ping \
+  xvfb \
+  curl\
+  jq\
+  wget\
+  ranger \
+  htop \
+  libgl1-mesa-glx \
+  libgl1-mesa-dri \
+  rfkill \
+  sudo \
+  usbutils \
+  software-properties-common \
+  mesa-utils \
+  && add-apt-repository universe \
+  && apt-get clean -qq
 
 RUN apt-get update \
- && apt install -y \
-        python3-flake8 \
-        python3-flake8-blind-except \
-        python3-flake8-builtins \
-        python3-flake8-class-newline \
-        python3-flake8-comprehensions \
-        python3-flake8-deprecated \
-        python3-flake8-docstrings \
-        python3-flake8-import-order \
-        python3-flake8-quotes \
-        python3-pytest \
-        python3-pytest-cov \
-        python3-pytest-repeat \
-        python3-pytest-rerunfailures
+  && apt install -y \
+  python3-flake8 \
+  python3-flake8-blind-except \
+  python3-flake8-builtins \
+  python3-flake8-class-newline \
+  python3-flake8-comprehensions \
+  python3-flake8-deprecated \
+  python3-flake8-docstrings \
+  python3-flake8-import-order \
+  python3-flake8-quotes \
+  python3-pytest \
+  python3-pytest-cov \
+  python3-pytest-repeat \
+  python3-pytest-rerunfailures
 
 
 # Agent forwarding during docker build https://stackoverflow.com/questions/43418188/ssh-agent-forwarding-during-docker-build
@@ -123,8 +123,8 @@ RUN /bin/sh -c 'sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/m
   && /bin/sh -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null'
 
 RUN apt update && sudo apt install -y \
-   python3-rosdep \
-   ros-dev-tools
+  python3-rosdep \
+  ros-dev-tools
 
 RUN apt-get update &&  apt-get upgrade -y && sudo apt install ros-${ROS2_DISTRO}-desktop -y
 
@@ -140,28 +140,28 @@ RUN apt-get install python-is-python3
 
 #Add mcap to bag things in ROS2
 RUN VERSION="releases/mcap-cli/v0.0.55" && \
-    RELEASE_URL=$(curl -s https://api.github.com/repos/foxglove/mcap/releases | jq -r --arg VERSION "$VERSION" '.[] | select(.tag_name == $VERSION) | .assets[0].browser_download_url') && \
-    echo "Downloading release $VERSION from: $RELEASE_URL" && \
-    curl -L -o /bin/mcap "$RELEASE_URL" && \
-    cd /bin && chmod +x mcap
+  RELEASE_URL=$(curl -s https://api.github.com/repos/foxglove/mcap/releases | jq -r --arg VERSION "$VERSION" '.[] | select(.tag_name == $VERSION) | .assets[0].browser_download_url') && \
+  echo "Downloading release $VERSION from: $RELEASE_URL" && \
+  curl -L -o /bin/mcap "$RELEASE_URL" && \
+  cd /bin && chmod +x mcap
 
 #installing CrazySim
 WORKDIR $HOME
 
 RUN git clone https://github.com/gtfactslab/CrazySim.git \
-    && cd CrazySim \
-    && git checkout 3246b07269c20413530269955ca054dab4426c15 \
-    && git submodule update --init --recursive \
-    && cd crazyflie-lib-python \
-    && pip install -e .
+  && cd CrazySim \
+  && git checkout 3246b07269c20413530269955ca054dab4426c15 \
+  && git submodule update --init --recursive \
+  && cd crazyflie-lib-python \
+  && pip install -e .
 
 RUN pip install Jinja2
 RUN cd $HOME/CrazySim/crazyflie-firmware \
-    &&  mkdir -p sitl_make/build && cd sitl_make/build \
-    &&  cmake .. \
-    &&  make all
+  &&  mkdir -p sitl_make/build && cd sitl_make/build \
+  &&  cmake .. \
+  &&  make all
 
-    
+
 #install other ROS2 ws packages
 RUN mkdir -p $HOME/ros2_ws/src \
   && cd $HOME/ros2_ws/src \
@@ -213,17 +213,17 @@ RUN echo "alias cd_icuas26_competition='cd /root/ros2_ws/src/icuas26_competition
 RUN apt install libboost-program-options-dev libusb-1.0-0-dev
 RUN pip3 install rowan transforms3d
 RUN apt-get update &&  apt-get upgrade -y && apt-get install -y \
-                   ros-${ROS2_DISTRO}-tf-transformations \
-                   ros-${ROS2_DISTRO}-nav2-map-server \
-                   ros-${ROS2_DISTRO}-nav2-lifecycle-manager \
-                   ros-${ROS2_DISTRO}-rosbridge-suite \
-                   ros-${ROS2_DISTRO}-rosbag2-storage-mcap \ 
-                   ros-${ROS2_DISTRO}-ros-gz-interfaces \
-                   ros-${ROS2_DISTRO}-ros-gz-bridge \
-                   ros-${ROS2_DISTRO}-octomap \
-                   ros-${ROS2_DISTRO}-octomap-ros \
-                   ros-${ROS2_DISTRO}-octomap-server \
-                   ros-${ROS2_DISTRO}-octomap-msgs
+  ros-${ROS2_DISTRO}-tf-transformations \
+  ros-${ROS2_DISTRO}-nav2-map-server \
+  ros-${ROS2_DISTRO}-nav2-lifecycle-manager \
+  ros-${ROS2_DISTRO}-rosbridge-suite \
+  ros-${ROS2_DISTRO}-rosbag2-storage-mcap \ 
+  ros-${ROS2_DISTRO}-ros-gz-interfaces \
+  ros-${ROS2_DISTRO}-ros-gz-bridge \
+  ros-${ROS2_DISTRO}-octomap \
+  ros-${ROS2_DISTRO}-octomap-ros \
+  ros-${ROS2_DISTRO}-octomap-server \
+  ros-${ROS2_DISTRO}-octomap-msgs
 RUN apt install -y ros-${ROS2_DISTRO}-ros-gz${GZ_RELEASE}
 
 
@@ -235,15 +235,13 @@ RUN echo "export ROS_DOMAIN_ID=$(shuf -i 1-101 -n 1)" >> $HOME/.bashrc
 WORKDIR $HOME/ros2_ws
 
 # Final build of ROS2 ws 
-COPY ./workspace/src $HOME/workspace/src
-WORKDIR $HOME/workspace/
 RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && cd $HOME/ros2_ws && colcon build"
 RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && source $HOME/ros2_ws/install/setup.bash && colcon build"
 # RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash;source $HOME/ros2_ws/install/setup.bash;colcon build --symlink-install --merge-install"
 # RUN bash -c "colcon build --merge-install --packages-select aruco_mission"
 # RUN bash -c "source /root/ros2_ws/install/setup.bash"
 RUN echo "ros2_ws" >> $HOME/.bashrc && \
-    echo "source_ros2" >> $HOME/.bashrc
+  echo "source_ros2" >> $HOME/.bashrc
 
 WORKDIR $HOME
 COPY to_copy/aliases $HOME/.bash_aliases
