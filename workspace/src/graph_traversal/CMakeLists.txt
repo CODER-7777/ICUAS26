@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.8)
-project(graph_traversal)
+set(PROJECT_NAME graph_traversal)
+project(${PROJECT_NAME})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-fdiagnostics-color=always)
 
@@ -20,6 +21,7 @@ find_package(std_srvs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(OpenMP REQUIRED)
 
 add_executable(bfs src/bfs.cpp src/utils.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
@@ -31,19 +33,21 @@ ament_target_dependencies(occupancy  rclcpp octomap octomap_msgs nav2_msgs)
 ament_target_dependencies(move  rclcpp octomap octomap_msgs nav2_msgs std_msgs std_srvs crazyflie_interfaces sensor_msgs)
 ament_target_dependencies(octomap_pub  rclcpp octomap octomap_msgs nav2_msgs std_srvs crazyflie_interfaces)
 
+target_include_directories(bfs PUBLIC include)
 target_link_libraries(bfs
   ${OpenCV_LIBRARIES}
   yaml-cpp
   octomap
 )
 
+target_include_directories(occupancy PUBLIC include)
 target_link_libraries(occupancy
   ${OpenCV_LIBRARIES}
   octomap
 )
 
-find_package(OpenMP REQUIRED)
 
+target_include_directories(move PUBLIC include)
 target_link_libraries(move
   ${OpenCV_LIBRARIES}
   octomap
@@ -51,6 +55,7 @@ target_link_libraries(move
   OpenMP::OpenMP_CXX
 )
 
+target_include_directories(octomap_pub PUBLIC include)
 target_link_libraries(octomap_pub
   ${OpenCV_LIBRARIES}
   octomap
