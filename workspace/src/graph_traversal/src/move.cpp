@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <octomap_msgs/srv/get_octomap.hpp>
-#include <octomap_msgs/msg/octomap.hpp>
 #include <octomap_msgs/conversions.h>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -17,8 +16,6 @@
 #include <mutex>
 #include <queue>
 #include <map>
-#include <unordered_set>
-#include <omp.h>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
 #include "utils.hpp"

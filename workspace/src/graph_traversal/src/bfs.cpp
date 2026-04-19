@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <octomap_msgs/srv/get_octomap.hpp>
-#include <octomap_msgs/msg/octomap.hpp>
 #include <octomap_msgs/conversions.h>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -16,7 +15,6 @@
 #include <cmath>
 
 #include "utils.hpp"
-#include <iostream>
 
 using namespace std::chrono_literals;
 
