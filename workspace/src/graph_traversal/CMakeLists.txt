@@ -40,6 +40,7 @@ target_link_libraries(utils
 )
 
 
+enable_testing()
 add_executable(test_utils src/test_utils.cpp)
 target_link_libraries(test_utils
   utils
