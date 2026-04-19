@@ -4,8 +4,8 @@
   
   "initializeCommand": "bash ./host_setup.sh",
 
-  "workspaceMount": "source=/home/soumya/Documents/Aerial_Robotics/icuas26_competition/workspace,target=/root/workspace,type=bind",
-  "workspaceFolder": "/root/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/root/icuas26_competition,type=bind",
+  "workspaceFolder": "/root/icuas26_competition",
 
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}",
@@ -26,7 +26,7 @@
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
     "source=/dev,target=/dev,type=bind",
     "source=/var/run/dbus,target=/var/run/dbus,type=bind",
-    "source=${localEnv:HOME}/.ssh/ssh_auth_sock,target=/ssh-agent,type=bind"
+    "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind,readonly"
   ],
 
   "customizations": {
