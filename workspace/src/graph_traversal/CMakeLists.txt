@@ -23,7 +23,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(OpenMP REQUIRED)
 
-add_library(utils SHARED src/utils.cpp)
+add_library(utils STATIC src/utils.cpp)
 add_executable(bfs src/bfs.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
 add_executable(move src/move.cpp)
@@ -36,7 +36,7 @@ ament_target_dependencies(octomap_pub  rclcpp octomap octomap_msgs nav2_msgs std
 
 
 target_link_libraries(utils
-        yaml-cpp
+  yaml-cpp
 )
 
 
