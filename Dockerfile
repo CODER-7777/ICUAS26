@@ -225,7 +225,7 @@ RUN apt-get update &&  apt-get upgrade -y && apt-get install -y \
   ros-${ROS2_DISTRO}-octomap-server \
   ros-${ROS2_DISTRO}-octomap-msgs
 RUN apt install -y ros-${ROS2_DISTRO}-ros-gz${GZ_RELEASE}
-
+RUN apt-get update && apt-get install -y libomp-dev
 
 # setup ros2 environment variables
 RUN echo "export ROS_LOCALHOST_ONLY=1" >> $HOME/.bashrc
@@ -234,7 +234,7 @@ RUN echo "export ROS_DOMAIN_ID=$(shuf -i 1-101 -n 1)" >> $HOME/.bashrc
 
 WORKDIR $HOME/ros2_ws
 
-# Final build of ROS2 ws 
+# Final build of ROS2 ws
 RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && cd $HOME/ros2_ws && colcon build"
 RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash && source $HOME/ros2_ws/install/setup.bash && colcon build"
 # RUN bash -c "source /opt/ros/${ROS2_DISTRO}/setup.bash;source $HOME/ros2_ws/install/setup.bash;colcon build --symlink-install --merge-install"
