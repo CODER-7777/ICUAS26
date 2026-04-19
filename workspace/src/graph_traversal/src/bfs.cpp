@@ -14,7 +14,7 @@
 #include <atomic>
 #include <cmath>
 
-#include "../include/utils.hpp"
+#include "utils.hpp"
 
 using namespace std::chrono_literals;
 
