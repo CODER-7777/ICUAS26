@@ -64,10 +64,10 @@
  // MARKER DETECTION TRACKING FOR MULTI-DRONE AVERAGING
  // ============================================================
  struct MarkerDetection {
-   double x = 0.0, y = 0.0, z = 0.0;
+   double x, y, z;
    std::string drone_id;
    rclcpp::Time timestamp;
-   double distance = 0.0; // Distance from drone to marker
+   double distance; // Distance from drone to marker
  };
  
  struct MarkerAggregator {

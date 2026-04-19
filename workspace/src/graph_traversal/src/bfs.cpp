@@ -5,13 +5,18 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <octomap/octomap.h>
+#include <opencv2/opencv.hpp>
 #include <queue>
 #include <vector>
 #include <mutex>
-#include <fstream>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+
+#include "utils.hpp"
+#include <iostream>
 
 using namespace std::chrono_literals;
 
@@ -22,10 +27,12 @@ public:
     OctomapBFSPlanner() : Node("octomap_bfs_planner") {
         // Parameters
         this->declare_parameter<double>("z_target", 1.0);
-        this->declare_parameter<double>("max_dist", 3.0);
-        this->declare_parameter<std::string>("csv_name", "path_log.csv");
-        this->declare_parameter<std::string>("frame_id", "map");
-
+        this->declare_parameter<double>("inflation_radius", 0.3);
+        this->declare_parameter<double>("max_dist", get_comm_range());
+        this->declare_parameter<std::string>("frame_id", "world");
+        // std::cout<<get_num_robots() << std::endl;
+        // std::cout<<get_charging_file() << std::endl;
+        // std::cout<<get_comm_range() << std::endl;
         callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
         
         auto sub_opt = rclcpp::SubscriptionOptions();
@@ -41,18 +48,23 @@ public:
 
         // Publishers
         path_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/drone/waypoint_array", 10);
+        z_target_pub_ = this->create_publisher<std_msgs::msg::Float64>("/mission/z_target", 10);
 
         // Service Client
         client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary", 
             rmw_qos_profile_services_default, callback_group_);
 
-        // 2Hz Control Loop
-        timer_ = this->create_wall_timer(500ms, std::bind(&OctomapBFSPlanner::timerLoop, this), callback_group_);
+        init_timer_ = this->create_wall_timer(
+            100ms,
+            [this]() {
+                if (map_ready_) return;
+                fetchOctomapOnce();
+            }
+        );
 
-        csv_file_.open(this->get_parameter("csv_name").as_string());
-        if (csv_file_.is_open()) {
-            csv_file_ << "timestamp,agv_x,agv_y,drone_points\n";
-        }
+        // 5Hz Control Loop
+        timer_ = this->create_wall_timer(100ms, std::bind(&OctomapBFSPlanner::timerLoop, this), callback_group_);
+
 
         is_planning_ = false;
         RCLCPP_INFO(this->get_logger(), "Planner Online. Publishing to /drone/waypoint_array");
@@ -64,60 +76,129 @@ private:
     geometry_msgs::msg::Point latest_agv_pose_;
     bool has_pose_ = false;
     std::shared_ptr<octomap::OcTree> tree_;
-    std::ofstream csv_file_;
+
+    // Height step after AGV loop completion (set from map z_max when map loads)
+    std::atomic<double> z_step_{1.0};
+    const double LOOP_DETECTION_RADIUS = 1.0;
+    int agv_loop_count_ = 0;
+    geometry_msgs::msg::Point agv_start_pos_;
+    bool agv_start_captured_ = false;
+    bool agv_away_from_start_ = false;
     
     rclcpp::CallbackGroup::SharedPtr callback_group_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr path_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr z_target_pub_;
     rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedPtr client_;
+    rclcpp::TimerBase::SharedPtr init_timer_;
     rclcpp::TimerBase::SharedPtr timer_;
+    nav_msgs::msg::OccupancyGrid cached_grid_;
+    std::atomic<bool> map_ready_{false};
 
     void timerLoop() {
         if (!rclcpp::ok()) return;
         if (is_planning_.exchange(true)) return;
 
-        if (!has_pose_ || !client_->wait_for_service(100ms)) {
+        if (!has_pose_ || !map_ready_) {
             is_planning_ = false;
             return;
         }
 
-        auto request = std::make_shared<octomap_msgs::srv::GetOctomap::Request>();
-        auto result_future = client_->async_send_request(request);
-        
-        if (result_future.wait_for(250ms) == std::future_status::ready) {
-            auto response = result_future.get();
-            if (response) {
-                this->processPlanning(response->map);
-            }
-        }
-        
-        is_planning_ = false; 
-    }
-
-    void processPlanning(const octomap_msgs::msg::Octomap& msg) {
-        octomap::AbstractOcTree* abs_tree = octomap_msgs::binaryMsgToMap(msg);
-        if (!abs_tree) return;
-        tree_.reset(dynamic_cast<octomap::OcTree*>(abs_tree));
-
-        auto grid = generateOccupancyGrid();
         geometry_msgs::msg::Point target;
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             target = latest_agv_pose_;
+            // Capture AGV start position once
+            if (!agv_start_captured_) {
+                agv_start_pos_ = target;
+                agv_start_captured_ = true;
+                RCLCPP_INFO(this->get_logger(), "AGV start position captured: (%.2f, %.2f)", target.x, target.y);
+            }
         }
 
-        auto path = runPlanningPipeline(grid, target);
+        // AGV loop detection: raise altitude when AGV returns to start
+        double dist_to_start = std::hypot(target.x - agv_start_pos_.x, target.y - agv_start_pos_.y);
+        if (!agv_away_from_start_ && dist_to_start > 3.0) {
+            agv_away_from_start_ = true;
+            RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
+        }
+        if (agv_away_from_start_ && dist_to_start < LOOP_DETECTION_RADIUS) {
+            agv_loop_count_++;
+            agv_away_from_start_ = false;
+            double current_z = this->get_parameter("z_target").as_double();
+            double maxD = this->get_parameter("max_dist").as_double();
+            double new_z = std::min(current_z + z_step_.load(), maxD);
+            this->set_parameter(rclcpp::Parameter("z_target", new_z));
+            RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.2f m (capped at max_dist)",
+                agv_loop_count_, new_z);
+        }
+
+        auto path = runPlanningPipeline(cached_grid_, target);
 
         if (!path.empty()) {
             publishPoseArray(path);
-            logToCSV(path, target);
+            // publishMarkers(path);
         }
+
+        // Publish z_target so move.cpp can use it (params are node-local in ROS2)
+        std_msgs::msg::Float64 z_msg;
+        z_msg.data = this->get_parameter("z_target").as_double();
+        z_target_pub_->publish(z_msg);
+
+        is_planning_ = false;
+    }
+
+    void fetchOctomapOnce() {
+        while (!client_->wait_for_service(1s)) {
+            RCLCPP_WARN(this->get_logger(), "Waiting for octomap service...");
+        }
+
+        auto req = std::make_shared<octomap_msgs::srv::GetOctomap::Request>();
+        auto future = client_->async_send_request(req);
+
+        if (future.wait_for(3s) != std::future_status::ready) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to get OctoMap");
+            return;
+        }
+
+        auto res = future.get();
+        if (!res) return;
+
+        octomap::AbstractOcTree* abs_tree =
+            octomap_msgs::binaryMsgToMap(res->map);
+
+        if (!abs_tree) return;
+
+        tree_.reset(dynamic_cast<octomap::OcTree*>(abs_tree));
+        if (!tree_) return;
+
+        // Get map z extent and set initial z_target + z_step for ~13 min runtime
+        double minX, minY, minZ, maxX, maxY, maxZ;
+        tree_->getMetricMin(minX, minY, minZ);
+        tree_->getMetricMax(maxX, maxY, maxZ);
+        const double z_max = maxZ;
+        double initial_z;
+        if (z_max <= 10.0) {
+            initial_z = 1.0;
+            z_step_.store(1.0);
+        } else {
+            double step = z_max / 10.0;
+            initial_z = step;
+            z_step_.store(step);
+        }
+        this->set_parameter(rclcpp::Parameter("z_target", initial_z));
+        RCLCPP_INFO(this->get_logger(), "Map z_max=%.2f m: initial z_target=%.2f, z_step=%.2f", z_max, initial_z, z_step_.load());
+
+        cached_grid_ = generateOccupancyGrid();
+        map_ready_ = true;
+
+        RCLCPP_INFO(this->get_logger(), "OctoMap and grid cached");
     }
 
     void publishPoseArray(const std::vector<geometry_msgs::msg::Point>& path) {
         geometry_msgs::msg::PoseArray array_msg;
         array_msg.header.stamp = this->now();
-        array_msg.header.frame_id = "world";
+        array_msg.header.frame_id = this->get_parameter("frame_id").as_string();
 
         for (const auto& pt : path) {
             geometry_msgs::msg::Pose p;
@@ -126,18 +207,6 @@ private:
             array_msg.poses.push_back(p);
         }
         path_pub_->publish(array_msg);
-    }
-
-    void logToCSV(const std::vector<geometry_msgs::msg::Point>& path, const geometry_msgs::msg::Point& target) {
-        if (csv_file_.is_open()) {
-            double ts = this->now().seconds();
-            csv_file_ << ts << "," << target.x << "," << target.y << ",";
-            for (size_t i = 0; i < path.size(); ++i) {
-                csv_file_ << path[i].x << ";" << path[i].y << (i == path.size() - 1 ? "" : "|");
-            }
-            csv_file_ << "\n";
-            csv_file_.flush();
-        }
     }
 
     std::vector<idx> bfs(idx start, idx end, const nav_msgs::msg::OccupancyGrid& map) {
@@ -181,33 +250,56 @@ private:
         return path;
     }
 
+    static double dist3D(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
+        double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        return std::sqrt(dx*dx + dy*dy + dz*dz);
+    }
+
     std::vector<geometry_msgs::msg::Point> runPlanningPipeline(const nav_msgs::msg::OccupancyGrid& map, geometry_msgs::msg::Point target) {
         double res = map.info.resolution;
         double ox = map.info.origin.position.x, oy = map.info.origin.position.y;
+        double z_target = this->get_parameter("z_target").as_double();
+        double maxD = this->get_parameter("max_dist").as_double();
+
         auto gToW = [&](int i, int j) {
             geometry_msgs::msg::Point p;
             p.x = ox + (i + 0.5) * res; p.y = oy + (j + 0.5) * res;
-            p.z = this->get_parameter("z_target").as_double();
+            p.z = z_target;
             return p;
         };
 
-        idx start = {(int)std::floor((0.0 - ox) / res), (int)std::floor((0.0 - oy) / res)};
-        idx end = {(int)std::floor((target.x - ox) / res), (int)std::floor((target.y - oy) / res)};
+        idx start_idx = {(int)std::floor((0.0 - ox) / res), (int)std::floor((0.0 - oy) / res)};
+        idx end_idx = {(int)std::floor((target.x - ox) / res), (int)std::floor((target.y - oy) / res)};
 
-        auto grid_path = bfs(start, end, map);
+        auto grid_path = bfs(start_idx, end_idx, map);
         if (grid_path.empty()) return {};
 
         std::vector<geometry_msgs::msg::Point> drone_pts;
-        double maxD = this->get_parameter("max_dist").as_double();
         size_t path_idx = 0;
         drone_pts.push_back(gToW(grid_path[0].i, grid_path[0].j));
+
+        const size_t end_grid_idx = grid_path.size() - 1;
 
         while (path_idx < grid_path.size() - 1) {
             bool found_jump = false;
             for (size_t j = grid_path.size() - 1; j > path_idx; --j) {
                 auto p_start = gToW(grid_path[path_idx].i, grid_path[path_idx].j);
                 auto p_check = gToW(grid_path[j].i, grid_path[j].j);
-                if (std::hypot(p_start.x - p_check.x, p_start.y - p_check.y) <= maxD && hasLineOfSight(p_start, p_check)) {
+                double dist;
+                if (path_idx == 0) {
+                    // First segment from base: use 3D distance with p_start z = 0.0 (base station)
+                    p_start.z = 0.0;
+                    dist = dist3D(p_start, p_check);
+                } else if (j == end_grid_idx) {
+                    // Last point (AGV): use 3D distance with p_check z = 0.0 (AGV on ground)
+                    p_check.z = 0.0;
+                    dist = dist3D(p_start, p_check);
+                } else {
+                    // Drone-to-drone: 2D horizontal distance (same altitude)
+                    dist = std::hypot(p_start.x - p_check.x, p_start.y - p_check.y);
+                }
+
+                if (dist <= maxD && hasLineOfSight(p_start, p_check, cached_grid_)) {
                     drone_pts.push_back(p_check);
                     path_idx = j;
                     found_jump = true;
@@ -219,41 +311,96 @@ private:
                 drone_pts.push_back(gToW(grid_path[path_idx].i, grid_path[path_idx].j));
             }
         }
+
+        // Remove first and last points
+        if (drone_pts.size() >= 2) {
+            drone_pts.erase(drone_pts.begin());
+            drone_pts.pop_back();
+        }
         return drone_pts;
     }
 
-    bool hasLineOfSight(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
-        if (!tree_) return false;
-        octomap::point3d origin(a.x, a.y, a.z), end_p(b.x, b.y, b.z), hit;
-        octomap::point3d dir = (end_p - origin);
-        double dist = dir.norm();
-        if (dist < 0.05) return true;
-        return !tree_->castRay(origin, dir.normalize(), hit, true, dist);
+    bool hasLineOfSight(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b, const nav_msgs::msg::OccupancyGrid& grid) {
+        double res = grid.info.resolution;
+        double ox = grid.info.origin.position.x;
+        double oy = grid.info.origin.position.y;
+
+        // Convert world to grid coordinates
+        int x0 = std::floor((a.x - ox) / res);
+        int y0 = std::floor((a.y - oy) / res);
+        int x1 = std::floor((b.x - ox) / res);
+        int y1 = std::floor((b.y - oy) / res);
+
+        int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+        int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+        int err = dx + dy;
+
+        while (true) {
+            // Check bounds and occupancy
+            if (x0 >= 0 && x0 < grid.info.width && y0 >= 0 && y0 < grid.info.height) {
+                if (grid.data[y0 * grid.info.width + x0] >= 50) return false;
+            }
+            if (x0 == x1 && y0 == y1) break;
+            int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+        return true;
     }
 
     nav_msgs::msg::OccupancyGrid generateOccupancyGrid() {
         double res = tree_->getResolution();
         double z = this->get_parameter("z_target").as_double();
+        double inflation_rad = this->get_parameter("inflation_radius").as_double();
+        int inflation_steps = std::ceil(inflation_rad / res);
+
         double minX, minY, minZ, maxX, maxY, maxZ;
-        tree_->getMetricMin(minX, minY, minZ); tree_->getMetricMax(maxX, maxY, maxZ);
-        
-        int minGx = std::floor(minX / res), minGy = std::floor(minY / res);
-        int w = std::ceil(maxX / res) - minGx + 1, h = std::ceil(maxY / res) - minGy + 1;
-        
+        tree_->getMetricMin(minX, minY, minZ); 
+        tree_->getMetricMax(maxX, maxY, maxZ);
+
+        int minGx = std::floor(minX / res);
+        int minGy = std::floor(minY / res);
+        int w = std::ceil(maxX / res) - minGx + 1;
+        int h = std::ceil(maxY / res) - minGy + 1;
+
         nav_msgs::msg::OccupancyGrid grid;
-        grid.info.resolution = res; grid.info.width = w; grid.info.height = h;
-        grid.info.origin.position.x = minGx * res; grid.info.origin.position.y = minGy * res;
+        grid.info.resolution = res; 
+        grid.info.width = w; 
+        grid.info.height = h;
+        grid.info.origin.position.x = minGx * res; 
+        grid.info.origin.position.y = minGy * res;
         grid.data.assign(w * h, 0);
 
         octomap::point3d bbx_min((float)minX, (float)minY, (float)(z - res));
         octomap::point3d bbx_max((float)maxX, (float)maxY, (float)(z + res));
-
+        
+        std::vector<int> obstacles;
         for (auto it = tree_->begin_leafs_bbx(bbx_min, bbx_max); it != tree_->end_leafs_bbx(); ++it) {
             if (tree_->isNodeOccupied(*it)) {
-                int lx = std::floor(it.getX() / res) - minGx, ly = std::floor(it.getY() / res) - minGy;
-                if (lx >= 0 && lx < w && ly >= 0 && ly < h) grid.data[ly * w + lx] = 100;
+                int lx = std::floor(it.getX() / res) - minGx;
+                int ly = std::floor(it.getY() / res) - minGy;
+                if (lx >= 0 && lx < w && ly >= 0 && ly < h) {
+                    obstacles.push_back(ly * w + lx);
+                }
             }
         }
+
+        for (int idx : obstacles) {
+            int cy = idx / w;
+            int cx = idx % w;
+            for (int dy = -inflation_steps; dy <= inflation_steps; ++dy) {
+                for (int dx = -inflation_steps; dx <= inflation_steps; ++dx) {
+                    if (dx*dx + dy*dy <= inflation_steps*inflation_steps) {
+                        int nx = cx + dx;
+                        int ny = cy + dy;
+                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                            grid.data[ny * w + nx] = 100;
+                        }
+                    }
+                }
+            }
+        }
+
         return grid;
     }
 };
@@ -266,4 +413,4 @@ int main(int argc, char** argv) {
     exec.spin();
     rclcpp::shutdown();
     return 0;
-} 
+}
