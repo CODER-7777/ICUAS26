@@ -158,7 +158,7 @@ private:
 
     void fetchOctomapOnce() {
         while (!client_->wait_for_service(1s)) {
-            RCLCPP_WARN(this->get_logger(), "Waiting for octomap service...");
+            RCLCPP_INFO(this->get_logger(), "Waiting for octomap service...");
         }
 
         auto req = std::make_shared<octomap_msgs::srv::GetOctomap::Request>();
