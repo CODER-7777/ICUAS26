@@ -97,29 +97,9 @@ private:
     nav_msgs::msg::OccupancyGrid cached_grid_;
     std::atomic<bool> map_ready_{false};
 
-    void timerLoop() {
-        if (!rclcpp::ok()) return;
-        if (is_planning_.exchange(true)) return;
-
-        if (!has_pose_ || !map_ready_) {
-            is_planning_ = false;
-            return;
-        }
-
-        geometry_msgs::msg::Point target;
-        {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            target = latest_agv_pose_;
-            // Capture AGV start position once
-            if (!agv_start_captured_) {
-                agv_start_pos_ = target;
-                agv_start_captured_ = true;
-                RCLCPP_INFO(this->get_logger(), "AGV start position captured: (%.2f, %.2f)", target.x, target.y);
-            }
-        }
-
+    void count_loop(geometry_msgs::msg::Point agv_pos) {
         // AGV loop detection: raise altitude when AGV returns to start
-        double dist_to_start = std::hypot(target.x - agv_start_pos_.x, target.y - agv_start_pos_.y);
+        double dist_to_start = std::hypot(agv_pos.x - agv_start_pos_.x, agv_pos.y - agv_start_pos_.y);
         if (!agv_away_from_start_ && dist_to_start > 3.0) {
             agv_away_from_start_ = true;
             RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
@@ -134,8 +114,32 @@ private:
             RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.2f m (capped at max_dist)",
                         agv_loop_count_, new_z);
         }
+    }
 
-        auto path = runPlanningPipeline(cached_grid_, target);
+    void timerLoop() {
+        if (!rclcpp::ok()) return;
+        if (is_planning_.exchange(true)) return;
+
+        if (!has_pose_ || !map_ready_) {
+            is_planning_ = false;
+            return;
+        }
+
+        geometry_msgs::msg::Point agv_pos;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            agv_pos = latest_agv_pose_;
+            // Capture AGV start position once
+            if (!agv_start_captured_) {
+                agv_start_pos_ = agv_pos;
+                agv_start_captured_ = true;
+                RCLCPP_INFO(this->get_logger(), "AGV start position captured: (%.2f, %.2f)", agv_pos.x, agv_pos.y);
+            }
+        }
+
+        count_loop(agv_pos);
+
+        auto path = runPlanningPipeline(cached_grid_, agv_pos);
 
         if (!path.empty()) {
             publishPoseArray(path);
@@ -278,7 +282,7 @@ private:
         double z_target = this->get_parameter("z_target").as_double();
         double maxD = this->get_parameter("max_dist").as_double();
 
-        auto gToW = [&](int i, int j) {
+        auto grid_to_world = [&](int i, int j) {
             geometry_msgs::msg::Point p;
             p.x = ox + (i + 0.5) * res;
             p.y = oy + (j + 0.5) * res;
@@ -294,15 +298,15 @@ private:
 
         std::vector<geometry_msgs::msg::Point> drone_pts;
         size_t path_idx = 0;
-        drone_pts.push_back(gToW(grid_path[0].i, grid_path[0].j));
+        drone_pts.push_back(grid_to_world(grid_path[0].i, grid_path[0].j));
 
         const size_t end_grid_idx = grid_path.size() - 1;
 
         while (path_idx < grid_path.size() - 1) {
             bool found_jump = false;
             for (size_t j = grid_path.size() - 1; j > path_idx; --j) {
-                auto p_start = gToW(grid_path[path_idx].i, grid_path[path_idx].j);
-                auto p_check = gToW(grid_path[j].i, grid_path[j].j);
+                auto p_start = grid_to_world(grid_path[path_idx].i, grid_path[path_idx].j);
+                auto p_check = grid_to_world(grid_path[j].i, grid_path[j].j);
                 double dist;
                 if (path_idx == 0) {
                     // First segment from base: use 3D distance with p_start z = 0.0 (base station)
@@ -326,7 +330,7 @@ private:
             }
             if (!found_jump) {
                 path_idx++;
-                drone_pts.push_back(gToW(grid_path[path_idx].i, grid_path[path_idx].j));
+                drone_pts.push_back(grid_to_world(grid_path[path_idx].i, grid_path[path_idx].j));
             }
         }
 
@@ -396,8 +400,8 @@ private:
         grid.info.origin.position.y = minGy * res;
         grid.data.assign(w * h, 0);
 
-        octomap::point3d bbx_min((float) minX, (float) minY, (float) (z - res));
-        octomap::point3d bbx_max((float) maxX, (float) maxY, (float) (z + res));
+        octomap::point3d bbx_min(static_cast<float>(minX), static_cast<float>(minY), static_cast<float>(z - res));
+        octomap::point3d bbx_max(static_cast<float>(maxX), static_cast<float>(maxY), static_cast<float>(z + res));
 
         std::vector<int> obstacles;
         for (auto it = tree_->begin_leafs_bbx(bbx_min, bbx_max); it != tree_->end_leafs_bbx(); ++it) {
