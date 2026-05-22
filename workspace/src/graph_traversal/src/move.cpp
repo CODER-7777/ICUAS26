@@ -17,7 +17,9 @@
 #include <mutex>
 #include <queue>
 #include <map>
+#include <set>
 #include <unordered_set>
+#include <utility>
 #include <omp.h>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
@@ -55,6 +57,25 @@ public:
         this->declare_parameter<double>("inflation_radius", 0.3); // Reduced slightly for better fit
         this->declare_parameter<double>("z_target", 1.0);
         this->declare_parameter<double>("max_speed", 12.0);  // m/s - speed limit for position commands
+
+        // --- Inter-drone repulsion tunables (see applyRepulsion) ---
+        // r_engage: start repelling below this distance
+        // r_release: stop repelling above this distance (hysteresis)
+        // z_threshold: ignore drones whose altitude differs by more than this
+        // gain: max repulsion magnitude factor
+        // max_step: clamp on the per-tick deflection (m). Was 1.0 — wildly too high.
+        // alpha: low-pass filter coefficient (0..1). Lower = smoother but laggier.
+        // tangent_weight: 0 = pure radial push (causes head-on bounce), >0 = swirl past.
+        // target_min_separation: in handleMission, push assigned targets apart so the
+        //                        controller never has to fight an unwinnable battle.
+        this->declare_parameter<double>("rep_r_engage", 0.7);
+        this->declare_parameter<double>("rep_r_release", 1.0);
+        this->declare_parameter<double>("rep_z_threshold", 0.4);
+        this->declare_parameter<double>("rep_gain", 1.2);
+        this->declare_parameter<double>("rep_max_step", 0.15);
+        this->declare_parameter<double>("rep_alpha", 0.4);
+        this->declare_parameter<double>("rep_tangent_weight", 0.3);
+        this->declare_parameter<double>("target_min_separation", 1.0);
         current_state_ = SwarmState::TAKEOFF;
         int N = get_num_robots();
         for (int i=1;i<=N;i++){
@@ -200,6 +221,17 @@ private:
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_drone_pub_;
     bool rth_state_initialised_ = false;
     bool rth_last_published_ = false;
+
+    // --- Repulsion state (protected by data_mutex_) ---
+    // Previous tick's positions, used for relative closing-velocity estimate.
+    std::map<std::string, geometry_msgs::msg::Point> prev_positions_;
+    // Persisted low-pass-filter state for each drone's deflection (dx, dy).
+    std::map<std::string, std::pair<double, double>> prev_deflection_;
+    // Hysteresis: set of directed pairs (me, other) currently "engaged" in repulsion.
+    std::set<std::pair<std::string, std::string>> engaged_pair_;
+    // Drone priority: higher value ignores conflicts, lower value yields.
+    // Recomputed each handleMission tick. See computeDronePriorities().
+    std::map<std::string, int> drone_priority_;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
     int rth_index_ = 0; // NEW: Track which drone is returning
     bool landing_service_called_ = false; // Flag to ensure landing service is called only once
@@ -964,25 +996,31 @@ private:
                 // NO BATTERY CHECK HERE - ALREADY HANDLED IN PRE-MATCHING!
                 // Just fallback to Shadow Logic
 
-                // Standard Shadow Logic
+                // Shadow logic: pick the closest mission anchor and offset by a
+                // unique angle per (anchor, drone) pair. Old version used
+                // `magic % 4` which collides (e.g. cf_1 and cf_5 both pick -x),
+                // leading to two idle drones at the same XY → permanent
+                // repulsion oscillation. New version: 8 slots around each
+                // anchor, hashed by (anchor_idx + magic) so distinct drones
+                // sharing an anchor get distinct slots in steady state.
                 int best_anchor_idx = 0;
                 double min_dist = 1e9;
                 for (size_t k = 0; k < anchors.size(); ++k) {
                     double d = dist3D(current_pos, anchors[k]);
-                    if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
+                    if (d < min_dist) { min_dist = d; best_anchor_idx = static_cast<int>(k); }
                 }
                 geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
-                double offset_dist = 2.0;
+                const double offset_dist = 2.0;
 
-                // Hashing for consistent offset
-                int magic = id[3] - '0'; // cf_X
-                if (magic % 4 == 0)      shadow_target.x += offset_dist;
-                else if (magic % 4 == 1) shadow_target.x -= offset_dist;
-                else if (magic % 4 == 2) shadow_target.y += offset_dist;
-                else                     shadow_target.y -= offset_dist;
+                int magic = (id.size() > 3 && std::isdigit(static_cast<unsigned char>(id[3])))
+                              ? (id[3] - '0') : 0;
+                int slot = ((magic - 1) + best_anchor_idx) & 0x7; // 0..7
+                const double angle = (slot * M_PI) / 4.0;          // 45° steps
+                shadow_target.x += offset_dist * std::cos(angle);
+                shadow_target.y += offset_dist * std::sin(angle);
 
                 jobs[global_idx].target_pos = shadow_target;
-                jobs[global_idx].target_z = z_mission; 
+                jobs[global_idx].target_z = z_mission;
             }
         }
         
@@ -1122,9 +1160,16 @@ private:
         // --- 3. Atomic Commit ---
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            active_commands_.clear(); 
+            active_commands_.clear();
             for (const auto& cmd_pair : new_commands) {
                 active_commands_[cmd_pair.first] = cmd_pair.second;
+            }
+
+            // Refresh repulsion priority table. publishCommands snapshots this
+            // every tick at 20 Hz; we refresh it from handleMission at 4 Hz.
+            drone_priority_.clear();
+            for (size_t k = 0; k < droneIds_.size(); ++k) {
+                drone_priority_[droneIds_[k]] = repulsionPriority(droneIds_[k], jobs[k].is_assigned);
             }
         }
     }
@@ -1293,60 +1338,157 @@ private:
         }
     }
 
+    // Compute drone priority for repulsion arbitration.
+    // Higher = ignores conflict, Lower = yields and gets deflected.
+    //   30xx: charging-related (constrained vertical motion, never deflect)
+    //   20xx: actively assigned to a mission target
+    //   10xx: idle / shadow position
+    // Within each band, lower drone-id (cf_1) gets higher priority. This breaks
+    // symmetry so two equally-classified drones never both push each other.
+    int repulsionPriority(const std::string& id, bool is_assigned) const {
+        int base;
+        auto it = battery_states_.find(id);
+        if (it != battery_states_.end()) {
+            const auto& bs = it->second;
+            if (bs.is_charging || bs.is_going_to_charge || bs.is_leaving_charger) {
+                base = 30;
+            } else if (is_assigned) {
+                base = 20;
+            } else {
+                base = 10;
+            }
+        } else {
+            base = is_assigned ? 20 : 10;
+        }
+        int magic = (id.size() > 3 && std::isdigit(static_cast<unsigned char>(id[3])))
+                        ? (id[3] - '0') : 9;
+        return base * 100 - magic;
+    }
+
+    // Multi-fix inter-drone repulsion:
+    //   (A) Asymmetric priority — higher-priority drone never deflects
+    //   (B) Hysteresis — engage at r_engage, release only past r_release
+    //   (C) Smooth quadratic force — no 1/dist singularity, low per-tick clamp
+    //   (D) Velocity gate — only repel if drones are actually closing
+    //   (E) Z-aware — ignore drones at different altitudes
+    //   (F) Low-pass filter on the deflection vector (per-drone state)
+    //   (G) Tangential component — drones slip past each other instead of bouncing
+    //
+    // Mutates `deflection_state` (LPF) and `engaged` (hysteresis) which the
+    // caller persists back into the class-member state.
     geometry_msgs::msg::Point applyRepulsion(
         geometry_msgs::msg::Point target,
         geometry_msgs::msg::Point current,
         const std::map<std::string, geometry_msgs::msg::Point>& all_positions,
-        std::string my_id) 
+        const std::map<std::string, geometry_msgs::msg::Point>& prev_positions,
+        const std::map<std::string, int>& priorities,
+        std::pair<double, double>& deflection_state,
+        std::set<std::pair<std::string, std::string>>& engaged,
+        const std::string& my_id)
     {
-        // TUNING PARAMETERS
-        // Dynamic Safe Radius: Standard 0.7m, but reduced during RTH to allow landing at close start points
-        double safe_radius = (current_state_ == SwarmState::RETURN_TO_HOME) ? 0.0 : 0.7; 
-        
-        double gain = 1.2;        // Strength of the push
-        const double MAX_REPULSION_STEP = 1.0; // CLAMP: Max 1m shift per step
+        // RTH: keep the original "no repulsion" behaviour so drones can land at
+        // close-by start positions.
+        if (current_state_ == SwarmState::RETURN_TO_HOME) return target;
+
+        const double r_engage   = this->get_parameter("rep_r_engage").as_double();
+        const double r_release  = this->get_parameter("rep_r_release").as_double();
+        const double z_thresh   = this->get_parameter("rep_z_threshold").as_double();
+        const double gain       = this->get_parameter("rep_gain").as_double();
+        const double max_step   = this->get_parameter("rep_max_step").as_double();
+        const double alpha      = this->get_parameter("rep_alpha").as_double();
+        const double tangent_w  = this->get_parameter("rep_tangent_weight").as_double();
+        constexpr double dt     = 0.05; // publishCommands runs at 20 Hz
 
         double dx_rep = 0.0;
         double dy_rep = 0.0;
-        bool avoidance_active = false;
+
+        auto my_prio_it = priorities.find(my_id);
+        int my_priority = (my_prio_it != priorities.end()) ? my_prio_it->second : 1000;
 
         for (const auto& [other_id, other_pos] : all_positions) {
-            if (other_id == my_id) continue; // Don't repel from self
+            if (other_id == my_id) continue;
 
-            // Use 2D horizontal distance for drone-to-drone (same altitude)
-            double dist = std::hypot(current.x - other_pos.x, current.y - other_pos.y);
-            
-            // Avoid division by zero
-            if (dist < 0.05) dist = 0.05; 
+            // (E) Z-aware: ignore drones at very different altitudes.
+            if (std::abs(current.z - other_pos.z) > z_thresh) continue;
 
-            if (dist < safe_radius) {
-                avoidance_active = true;
-                
-                // Vector FROM other drone TO me (Push Away)
-                double dx = current.x - other_pos.x;
-                double dy = current.y - other_pos.y;
-                
-                // Formula: Strength increases as distance decreases
-                // Normalized Vector (dx/dist) * Magnitude (gain * (safe - dist))
-                double strength = gain * (safe_radius - dist) / dist;
-                
-                dx_rep += dx * strength;
-                dy_rep += dy * strength;
+            // (A) Asymmetric priority: I never deflect from a lower-priority drone
+            // (they'll deflect from me instead). Strictly greater so equal-priority
+            // would still both react — but tie-break in repulsionPriority() ensures
+            // strict inequality between any two distinct drones.
+            auto other_prio_it = priorities.find(other_id);
+            int other_priority = (other_prio_it != priorities.end()) ? other_prio_it->second : 1000;
+            if (my_priority > other_priority) continue;
+
+            double dx = current.x - other_pos.x;
+            double dy = current.y - other_pos.y;
+            double dist = std::hypot(dx, dy);
+            if (dist < 0.05) dist = 0.05;
+
+            // (B) Hysteresis: directed pair (my_id, other_id) — each drone tracks
+            // its own engagement state independently.
+            const auto pair_key = std::make_pair(my_id, other_id);
+            const bool was_engaged = engaged.count(pair_key) > 0;
+            bool is_engaged = was_engaged;
+            if (!was_engaged && dist < r_engage) {
+                engaged.insert(pair_key);
+                is_engaged = true;
+            } else if (was_engaged && dist > r_release) {
+                engaged.erase(pair_key);
+                is_engaged = false;
             }
+            if (!is_engaged) continue;
+
+            // (D) Velocity gate: skip if we're already separating quickly. Uses
+            // the previous tick's positions to estimate relative closing rate.
+            auto my_prev_it = prev_positions.find(my_id);
+            auto ot_prev_it = prev_positions.find(other_id);
+            if (my_prev_it != prev_positions.end() && ot_prev_it != prev_positions.end()) {
+                double prev_dx = my_prev_it->second.x - ot_prev_it->second.x;
+                double prev_dy = my_prev_it->second.y - ot_prev_it->second.y;
+                double prev_dist = std::hypot(prev_dx, prev_dy);
+                if (prev_dist < 0.05) prev_dist = 0.05;
+                // Positive closing_rate = approaching. Negative = separating.
+                double closing_rate = (prev_dist - dist) / dt;
+                // Allow a small bias: only skip if clearly separating (> 5 cm/s).
+                if (closing_rate < -0.05) continue;
+            }
+
+            // (C) Smooth quadratic force, bounded between 0 and `gain`.
+            double t = (r_engage - dist) / r_engage;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+            double strength = gain * t * t;
+
+            // (G) Radial + tangential: tangent_sign chosen deterministically per
+            // unordered pair so the two drones pick opposite sides. Result: when
+            // they MUST pass each other they swirl past instead of head-on bouncing.
+            double rx = dx / dist;
+            double ry = dy / dist;
+            double tangent_sign = (my_id < other_id) ? +1.0 : -1.0;
+            double tx = -ry * tangent_sign;
+            double ty =  rx * tangent_sign;
+
+            dx_rep += strength * ((1.0 - tangent_w) * rx + tangent_w * tx);
+            dy_rep += strength * ((1.0 - tangent_w) * ry + tangent_w * ty);
         }
 
-        if (avoidance_active) {
-            // CLAMPING LOGIC
-            double rep_mag = std::hypot(dx_rep, dy_rep);
-            if (rep_mag > MAX_REPULSION_STEP) {
-                dx_rep = (dx_rep / rep_mag) * MAX_REPULSION_STEP;
-                dy_rep = (dy_rep / rep_mag) * MAX_REPULSION_STEP;
-            }
-
-            target.x += dx_rep;
-            target.y += dy_rep;
+        // (C) Per-tick clamp. With max_step=0.15 m at 20 Hz that's 3 m/s lateral
+        // correction capacity — plenty without teleporting.
+        double mag = std::hypot(dx_rep, dy_rep);
+        if (mag > max_step) {
+            dx_rep = (dx_rep / mag) * max_step;
+            dy_rep = (dy_rep / mag) * max_step;
         }
-        
+
+        // (F) Low-pass filter on the deflection vector. Smooths out any
+        // remaining tick-to-tick noise. Persisted across calls via deflection_state.
+        dx_rep = alpha * dx_rep + (1.0 - alpha) * deflection_state.first;
+        dy_rep = alpha * dy_rep + (1.0 - alpha) * deflection_state.second;
+        deflection_state.first  = dx_rep;
+        deflection_state.second = dy_rep;
+
+        target.x += dx_rep;
+        target.y += dy_rep;
         return target;
     }
 
@@ -1356,55 +1498,67 @@ private:
             std::vector<crazyflie_interfaces::msg::Position> waypoints;
         };
         std::vector<DroneCmd> batch_buffer;
-        
-        // NEW: We need a snapshot of where everyone is RIGHT NOW
+
+        // Snapshot everything publishCommands needs in one lock acquire, then
+        // release the lock for the (slower) loop body.
         std::map<std::string, geometry_msgs::msg::Point> current_positions;
+        std::map<std::string, geometry_msgs::msg::Point> prev_positions_snap;
+        std::map<std::string, std::pair<double, double>> deflection_snap;
+        std::set<std::pair<std::string, std::string>> engaged_snap;
+        std::map<std::string, int> priorities_snap;
 
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (current_state_ != SwarmState::MISSION && current_state_ != SwarmState::RETURN_TO_HOME) return;
 
-            // Snapshot Commands
             batch_buffer.reserve(active_commands_.size());
             for (const auto& kv : active_commands_) {
                 if (!kv.second.empty()) {
                     batch_buffer.push_back({kv.first, kv.second});
                 }
             }
-            
-            // Snapshot Positions (for collision checks)
-            for(const auto& kv : swarm_poses_) {
+
+            for (const auto& kv : swarm_poses_) {
                 current_positions[kv.first] = kv.second.pose.position;
             }
-        } 
+
+            // Snapshot repulsion state for use during the loop.
+            prev_positions_snap = prev_positions_;
+            deflection_snap     = prev_deflection_;
+            engaged_snap        = engaged_pair_;
+            priorities_snap     = drone_priority_;
+        }
 
         // OMP removed: with batch_buffer.size() == NUM_ROBOTS (5) and a body
         // that's a handful of arithmetic ops + one publish, the fork/join +
         // thread-pool overhead consistently exceeds the work itself.
         for (int i = 0; i < (int)batch_buffer.size(); ++i) {
             const auto& item = batch_buffer[i];
-            
+
             auto pub_it = cmd_pubs_.find(item.id);
-            
-            // Only proceed if we have a publisher and a current position for this drone
+
             if (pub_it != cmd_pubs_.end() && !item.waypoints.empty() && current_positions.count(item.id)) {
-                
-                // 1. Pick the Next Waypoint
+
                 size_t target_idx = (item.waypoints.size() > 1) ? 1 : 0;
                 auto next_wp = item.waypoints[target_idx];
-                
-                // Convert to Point for calculation
+
                 geometry_msgs::msg::Point target_pt;
                 target_pt.x = next_wp.x;
                 target_pt.y = next_wp.y;
-                target_pt.z = next_wp.z; // Repulsion usually purely horizontal (XY)
+                target_pt.z = next_wp.z;
 
-                // 2. APPLY REPULSION
-                // Nudge the target point away from neighbors
+                // Ensure a deflection-state slot exists so the LPF in applyRepulsion
+                // can mutate it in place (operator[] inserts a zero-initialised pair).
+                auto& defl = deflection_snap[item.id];
+
                 geometry_msgs::msg::Point adjusted_pt = applyRepulsion(
-                    target_pt, 
-                    current_positions[item.id], 
-                    current_positions, 
+                    target_pt,
+                    current_positions[item.id],
+                    current_positions,
+                    prev_positions_snap,
+                    priorities_snap,
+                    defl,
+                    engaged_snap,
                     item.id
                 );
 
@@ -1432,6 +1586,15 @@ private:
                 
                 pub_it->second->publish(safe_cmd);
             }
+        }
+
+        // Write the mutated repulsion state back, and record today's positions
+        // as next tick's "prev" for the velocity-gate calculation.
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            prev_deflection_ = std::move(deflection_snap);
+            engaged_pair_    = std::move(engaged_snap);
+            prev_positions_  = std::move(current_positions);
         }
     } // end publishCommands
 }; // end SwarmPlanner
