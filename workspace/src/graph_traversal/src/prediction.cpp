@@ -4,10 +4,12 @@
 
 using namespace std::chrono_literals;
 
-class OctomapServiceToTopic : public rclcpp::Node {
+class OctomapServiceToTopic : public rclcpp::Node
+{
 public:
     OctomapServiceToTopic()
-        : Node("octomap_service_to_topic") {
+        : Node("octomap_service_to_topic")
+    {
         client_ = this->create_client<octomap_msgs::srv::GetOctomap>(
             "octomap_binary");
 
@@ -21,7 +23,8 @@ public:
     }
 
 private:
-    void timerCallback() {
+    void timerCallback()
+    {
         if (!client_->service_is_ready()) {
             RCLCPP_WARN_THROTTLE(
                 this->get_logger(), *this->get_clock(), 2000,
@@ -33,7 +36,8 @@ private:
 
         client_->async_send_request(
             request,
-            [this](rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedFuture future) {
+            [this](rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedFuture future)
+            {
                 auto response = future.get();
                 if (response) {
                     pub_->publish(response->map);
@@ -46,7 +50,8 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 };
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<OctomapServiceToTopic>());
     rclcpp::shutdown();
