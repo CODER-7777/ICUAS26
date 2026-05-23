@@ -25,8 +25,6 @@
  #include <unordered_set>
  #include <vector>
  
- //changes made
- 
  // ============================================================
  // GROUND TRUTH DATA (Extracted from Gazebo World XML)
  // format: id -> (x, y, z)
