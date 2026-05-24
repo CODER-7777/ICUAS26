@@ -18,6 +18,7 @@
 #include <queue>
 #include <map>
 #include <unordered_set>
+#include <functional>
 #include <omp.h>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
@@ -48,6 +49,228 @@ struct AStarNode {
 };
 
 enum class SwarmState { TAKEOFF, MISSION, RETURN_TO_HOME };
+
+// ============================================================================
+// SearchManager: ArUco search via per-pole viewing zones.
+//
+// Per search.md:
+//   1. Locate pole centres from the octomap.
+//   2. Each pole has 8 zones = 4 cardinal directions x 2 heights (25%, 75%).
+//   3. Each zone has a viewing volume; drone "in zone" -> zone searched.
+//   4. Filter zones reachable while keeping LOS to an anchor (drone/base).
+//   5. Send drone to nearest unvisited valid zone, yaw toward pole centre.
+// ============================================================================
+struct PoleInfo {
+    double cx, cy;        // XY centre (world)
+    double radius;        // approx pole half-width
+    double z_bottom;      // bottom of pole
+    double z_top;         // top of pole
+};
+
+struct ViewZone {
+    double x, y, z;       // drone target position
+    double yaw;           // facing pole centre
+    int pole_idx;         // which pole this zone belongs to
+    int dir_idx;          // 0..3 cardinal (E,N,W,S)
+    int height_idx;       // 0 = low (25%), 1 = high (75%)
+    bool visited = false;
+};
+
+class SearchManager {
+public:
+    // Tunables (could be exposed as ROS params later).
+    double standoff_ = 1.5;       // distance from pole surface to zone centre
+    double visit_radius_ = 1.5;   // drone must be this close to mark visited
+    double zone_height_low_ = 0.25;  // 25% of pole height
+    double zone_height_high_ = 0.75; // 75% of pole height
+    double min_pole_cells_ = 4;   // floor area threshold to count as pole
+    double max_pole_extent_ = 1.5; // m; reject components wider than this (walls)
+
+    std::vector<PoleInfo> poles_;
+    std::vector<ViewZone> zones_;
+
+    // -------------------------------------------------------------------
+    // Detect pole centres from the octree. Slice near the floor: every
+    // occupied leaf in [z_floor_min, z_floor_min + slab] becomes an
+    // obstacle pixel; flood-fill the resulting binary grid into connected
+    // components; reject components that are too large (walls/fences).
+    // -------------------------------------------------------------------
+    void buildFromOctomap(const octomap::OcTree& tree) {
+        poles_.clear();
+        zones_.clear();
+
+        double res = tree.getResolution();
+        double minX, minY, minZ, maxX, maxY, maxZ;
+        const_cast<octomap::OcTree&>(tree).getMetricMin(minX, minY, minZ);
+        const_cast<octomap::OcTree&>(tree).getMetricMax(maxX, maxY, maxZ);
+
+        // Floor slab: 0.3 m thick starting ~0.2 m above the ground. Poles
+        // are guaranteed to be present here, while ground noise above the
+        // physical floor is uncommon.
+        double z_slab_lo = minZ + 0.2;
+        double z_slab_hi = std::min(z_slab_lo + 0.3, maxZ);
+
+        int minGx = std::floor(minX / res);
+        int minGy = std::floor(minY / res);
+        int w = std::ceil(maxX / res) - minGx + 1;
+        int h = std::ceil(maxY / res) - minGy + 1;
+
+        std::vector<uint8_t> occ(w * h, 0);
+        octomap::point3d bbx_min((float)minX, (float)minY, (float)z_slab_lo);
+        octomap::point3d bbx_max((float)maxX, (float)maxY, (float)z_slab_hi);
+        for (auto it = const_cast<octomap::OcTree&>(tree).begin_leafs_bbx(bbx_min, bbx_max);
+             it != const_cast<octomap::OcTree&>(tree).end_leafs_bbx(); ++it) {
+            if (!const_cast<octomap::OcTree&>(tree).isNodeOccupied(*it)) continue;
+            int lx = std::floor(it.getX() / res) - minGx;
+            int ly = std::floor(it.getY() / res) - minGy;
+            if (lx >= 0 && lx < w && ly >= 0 && ly < h) {
+                occ[ly * w + lx] = 1;
+            }
+        }
+
+        // Flood-fill connected components (4-connected; pole cross-sections
+        // are small enough that 4-conn vs 8-conn makes no real difference).
+        std::vector<int> label(w * h, -1);
+        int next_label = 0;
+        for (int j = 0; j < h; ++j) {
+            for (int i = 0; i < w; ++i) {
+                int idx = j * w + i;
+                if (!occ[idx] || label[idx] != -1) continue;
+                // BFS
+                std::queue<int> q;
+                q.push(idx);
+                label[idx] = next_label;
+                std::vector<int> comp_cells;
+                int min_i = i, max_i = i, min_j = j, max_j = j;
+                while (!q.empty()) {
+                    int cur = q.front(); q.pop();
+                    comp_cells.push_back(cur);
+                    int ci = cur % w, cj = cur / w;
+                    min_i = std::min(min_i, ci); max_i = std::max(max_i, ci);
+                    min_j = std::min(min_j, cj); max_j = std::max(max_j, cj);
+                    const int di[4] = {1, -1, 0, 0};
+                    const int dj[4] = {0, 0, 1, -1};
+                    for (int k = 0; k < 4; ++k) {
+                        int ni = ci + di[k], nj = cj + dj[k];
+                        if (ni < 0 || ni >= w || nj < 0 || nj >= h) continue;
+                        int nidx = nj * w + ni;
+                        if (!occ[nidx] || label[nidx] != -1) continue;
+                        label[nidx] = next_label;
+                        q.push(nidx);
+                    }
+                }
+                next_label++;
+
+                // Reject too-small (noise) or too-large (walls / fences).
+                if ((int)comp_cells.size() < min_pole_cells_) continue;
+                double extent_x = (max_i - min_i + 1) * res;
+                double extent_y = (max_j - min_j + 1) * res;
+                if (extent_x > max_pole_extent_ || extent_y > max_pole_extent_) continue;
+
+                // Centroid in world coords.
+                double sx = 0.0, sy = 0.0;
+                for (int c : comp_cells) {
+                    int ci = c % w, cj = c / w;
+                    sx += (minGx + ci + 0.5) * res;
+                    sy += (minGy + cj + 0.5) * res;
+                }
+                sx /= comp_cells.size();
+                sy /= comp_cells.size();
+
+                PoleInfo p;
+                p.cx = sx;
+                p.cy = sy;
+                p.radius = 0.5 * std::max(extent_x, extent_y);
+                p.z_bottom = minZ;
+                p.z_top = maxZ; // assume pole spans full vertical extent
+                poles_.push_back(p);
+            }
+        }
+
+        // Generate 8 zones per pole (4 cardinal x 2 heights).
+        const double dirs[4][2] = { {1,0}, {0,1}, {-1,0}, {0,-1} }; // E, N, W, S
+        for (size_t pi = 0; pi < poles_.size(); ++pi) {
+            const auto& p = poles_[pi];
+            double height = std::max(0.5, p.z_top - p.z_bottom);
+            double z_lo = p.z_bottom + zone_height_low_ * height;
+            double z_hi = p.z_bottom + zone_height_high_ * height;
+            for (int d = 0; d < 4; ++d) {
+                double r = p.radius + standoff_;
+                for (int hidx = 0; hidx < 2; ++hidx) {
+                    ViewZone z;
+                    z.x = p.cx + r * dirs[d][0];
+                    z.y = p.cy + r * dirs[d][1];
+                    z.z = (hidx == 0) ? z_lo : z_hi;
+                    z.yaw = std::atan2(p.cy - z.y, p.cx - z.x); // face the pole
+                    z.pole_idx = (int)pi;
+                    z.dir_idx = d;
+                    z.height_idx = hidx;
+                    zones_.push_back(z);
+                }
+            }
+        }
+    }
+
+    // Mark every zone within visit_radius (3D) of (x,y,z) as visited, but
+    // only on the correct (pole-facing) side so we don't accidentally mark
+    // the opposite zone when flying past a pole on the wrong side.
+    void markVisited(double x, double y, double z) {
+        for (auto& zn : zones_) {
+            if (zn.visited) continue;
+            double dx = zn.x - x;
+            double dy = zn.y - y;
+            double dz = zn.z - z;
+            if (std::sqrt(dx*dx + dy*dy + dz*dz) > visit_radius_) continue;
+            // Side check: drone must be on the same side of the pole as
+            // the zone (dot of zone->pole offset with drone->pole offset).
+            const auto& p = poles_[zn.pole_idx];
+            double zone_off_x = zn.x - p.cx;
+            double zone_off_y = zn.y - p.cy;
+            double drone_off_x = x - p.cx;
+            double drone_off_y = y - p.cy;
+            if (zone_off_x * drone_off_x + zone_off_y * drone_off_y <= 0.0) continue;
+            zn.visited = true;
+        }
+    }
+
+    // Pick nearest unvisited zone that has LOS to at least one anchor
+    // (drone or base station) within comm_range. `losCheck` is a callback
+    // that returns true iff zone -> anchor is unobstructed on the grid.
+    //
+    // Returns -1 if no valid zone exists.
+    int pickNextZone(
+        double drone_x, double drone_y, double drone_z,
+        const std::vector<geometry_msgs::msg::Point>& anchors,
+        double comm_range,
+        const std::function<bool(double, double, double, double)>& losCheck) const
+    {
+        int best = -1;
+        double best_d = 1e18;
+        for (size_t i = 0; i < zones_.size(); ++i) {
+            const auto& zn = zones_[i];
+            if (zn.visited) continue;
+
+            // LOS / range constraint: must be visible from at least one anchor.
+            bool anchored = false;
+            for (const auto& a : anchors) {
+                double dx = zn.x - a.x, dy = zn.y - a.y, dz = zn.z - a.z;
+                if (std::sqrt(dx*dx + dy*dy + dz*dz) > comm_range) continue;
+                if (losCheck(a.x, a.y, zn.x, zn.y)) { anchored = true; break; }
+            }
+            if (!anchored) continue;
+
+            double dx = zn.x - drone_x, dy = zn.y - drone_y, dz = zn.z - drone_z;
+            double d = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (d < best_d) { best_d = d; best = (int)i; }
+        }
+        return best;
+    }
+
+    bool allVisited() const {
+        for (const auto& z : zones_) if (!z.visited) return false;
+        return !zones_.empty();
+    }
+};
 
 class SwarmPlanner : public rclcpp::Node {
 public:
@@ -93,8 +316,11 @@ public:
                     // Capture Initial Pose
                     if (this->initial_poses_.find(id) == this->initial_poses_.end()) {
                         this->initial_poses_[id] = msg->pose.position;
+                        // Use pole bottom (octomap minZ) as ground reference; fall back to
+                        // raw pose z until the map arrives (patched in fetchOctomapOnce).
+                        this->initial_poses_[id].z = this->map_ready_ ? this->pole_z_bottom_ : msg->pose.position.z;
                         RCLCPP_INFO(this->get_logger(), "Captured Home Position for %s: (%.2f, %.2f, %.2f)", 
-                            id.c_str(), msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+                            id.c_str(), msg->pose.position.x, msg->pose.position.y, this->initial_poses_[id].z);
                     }
                 }, sub_opt));
 
@@ -201,6 +427,7 @@ private:
     bool rth_state_initialised_ = false;
     bool rth_last_published_ = false;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_; // NEW: Store start positions
+    double pole_z_bottom_ = 0.0; // Ground height from octomap (bottom of poles = drone start height)
     int rth_index_ = 0; // NEW: Track which drone is returning
     bool landing_service_called_ = false; // Flag to ensure landing service is called only once
     bool mission_drone_published_ = false; // Ensure /mission_drone is published only once
@@ -225,6 +452,10 @@ private:
     std::vector<geometry_msgs::msg::Point> charging_slots_;
     std::vector<bool> slot_occupied_;
     const int MAX_CHARGING_DRONES = 2; // User limit
+
+    // --- ArUco Search (per search.md) ---
+    SearchManager search_mgr_;
+    bool search_built_ = false;
 
     void initializeBMS() {
         // 1. Load Charging Area Parameters
@@ -314,6 +545,27 @@ private:
                     cached_grid_ = std::make_shared<const nav_msgs::msg::OccupancyGrid>(generateOccupancyGrid());
                     map_ready_ = true;
                     RCLCPP_INFO(this->get_logger(), "Map Received. Grid Resolution: %.2f", cached_grid_->info.resolution);
+
+                    // Build search zones from poles detected in the octree.
+                    if (tree_ && !search_built_) {
+                        // Record ground height (pole z_bottom = octomap minZ = drone start height)
+                        double minX2, minY2, minZ2, maxX2, maxY2, maxZ2;
+                        tree_->getMetricMin(minX2, minY2, minZ2);
+                        tree_->getMetricMax(maxX2, maxY2, maxZ2);
+                        pole_z_bottom_ = minZ2;
+
+                        search_mgr_.buildFromOctomap(*tree_);
+                        search_built_ = true;
+
+                        // Patch any initial poses already captured: override z with ground height
+                        for (auto& kv : initial_poses_) {
+                            kv.second.z = pole_z_bottom_;
+                        }
+
+                        RCLCPP_INFO(this->get_logger(),
+                            "SearchManager: detected %zu poles -> %zu zones. pole_z_bottom=%.3f",
+                            search_mgr_.poles_.size(), search_mgr_.zones_.size(), pole_z_bottom_);
+                    }
                 }
             });
     }
@@ -659,7 +911,7 @@ private:
                 if (!client->service_is_ready()) continue;
                 
                 auto req = std::make_shared<crazyflie_interfaces::srv::Takeoff::Request>();
-                req->height = 1.0; 
+                req->height = 1.0;
                 req->duration.sec = 2;
                 req->duration.nanosec = 0;
                 client->async_send_request(req);
@@ -727,6 +979,14 @@ private:
         }
         if (!local_grid_ptr) return; // shouldn't happen since map_ready_ gate above
         const nav_msgs::msg::OccupancyGrid& local_grid = *local_grid_ptr;
+
+        // --- SEARCH: mark zones visited by any drone this tick ---
+        if (search_built_) {
+            for (const auto& kv : local_poses) {
+                const auto& p = kv.second.pose.position;
+                search_mgr_.markVisited(p.x, p.y, p.z);
+            }
+        }
 
         // z_mission from /mission/z_target topic (bfs publishes, updates on AGV loop)
         const double z_mission = has_z_target_ ? z_target_from_bfs_.load() : this->get_parameter("z_target").as_double();
@@ -920,6 +1180,8 @@ private:
             bool is_assigned;
             geometry_msgs::msg::Point target_pos; 
             double target_z;
+            bool has_search_yaw = false;  // override yaw at final waypoint (face pole)
+            double search_yaw = 0.0;
         };
 
         std::vector<DroneJob> jobs(num_drones); // We still need entries for ALL drones to process them
@@ -958,31 +1220,67 @@ private:
                 jobs[global_idx].target_pos = local_targets.poses[t_idx].position;
                 jobs[global_idx].target_z = z_mission;
             } else {
-                // --- IDLE DRONE (SHADOW STRATEGY) ---
+                // --- IDLE DRONE: ArUco SEARCH per search.md ---
                 jobs[global_idx].is_assigned = false;
-                
-                // NO BATTERY CHECK HERE - ALREADY HANDLED IN PRE-MATCHING!
-                // Just fallback to Shadow Logic
 
-                // Standard Shadow Logic
-                int best_anchor_idx = 0;
-                double min_dist = 1e9;
-                for (size_t k = 0; k < anchors.size(); ++k) {
-                    double d = dist3D(current_pos, anchors[k]);
-                    if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
+                // Anchor set for LOS = base station + every active drone's
+                // current position (idle drones can chain off active ones).
+                std::vector<geometry_msgs::msg::Point> search_anchors;
+                geometry_msgs::msg::Point base_pt;
+                base_pt.x = 0.0; base_pt.y = 0.0; base_pt.z = z_mission;
+                search_anchors.push_back(base_pt);
+                for (const auto& kv : drone_to_target) {
+                    // kv.first = index into available_drones (active set)
+                    const std::string& aid = available_drones[kv.first];
+                    auto pit = local_poses.find(aid);
+                    if (pit != local_poses.end()) {
+                        search_anchors.push_back(pit->second.pose.position);
+                    }
                 }
-                geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
-                double offset_dist = 2.0;
 
-                // Hashing for consistent offset
-                int magic = id[3] - '0'; // cf_X
-                if (magic % 4 == 0)      shadow_target.x += offset_dist;
-                else if (magic % 4 == 1) shadow_target.x -= offset_dist;
-                else if (magic % 4 == 2) shadow_target.y += offset_dist;
-                else                     shadow_target.y -= offset_dist;
+                // LOS predicate uses the inflated 2D grid (Bresenham).
+                auto losCb = [&](double ax, double ay, double bx, double by) {
+                    double res = local_grid.info.resolution;
+                    double ox = local_grid.info.origin.position.x;
+                    double oy = local_grid.info.origin.position.y;
+                    idx s{(int)std::floor((ax - ox) / res), (int)std::floor((ay - oy) / res)};
+                    idx e{(int)std::floor((bx - ox) / res), (int)std::floor((by - oy) / res)};
+                    return hasGridLineOfSight(s, e, local_grid);
+                };
 
-                jobs[global_idx].target_pos = shadow_target;
-                jobs[global_idx].target_z = z_mission; 
+                int zone_id = -1;
+                if (search_built_ && !search_mgr_.zones_.empty()) {
+                    zone_id = search_mgr_.pickNextZone(
+                        current_pos.x, current_pos.y, current_pos.z,
+                        search_anchors, get_comm_range(), losCb);
+                }
+
+                if (zone_id >= 0) {
+                    const auto& zn = search_mgr_.zones_[zone_id];
+                    jobs[global_idx].target_pos.x = zn.x;
+                    jobs[global_idx].target_pos.y = zn.y;
+                    jobs[global_idx].target_pos.z = zn.z;
+                    jobs[global_idx].target_z = zn.z;
+                    jobs[global_idx].has_search_yaw = true;
+                    jobs[global_idx].search_yaw = zn.yaw;
+                } else {
+                    // Fallback: legacy shadow logic (no reachable unvisited zone).
+                    int best_anchor_idx = 0;
+                    double min_dist = 1e9;
+                    for (size_t k = 0; k < anchors.size(); ++k) {
+                        double d = dist3D(current_pos, anchors[k]);
+                        if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
+                    }
+                    geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
+                    double offset_dist = 2.0;
+                    int magic = id[3] - '0';
+                    if (magic % 4 == 0)      shadow_target.x += offset_dist;
+                    else if (magic % 4 == 1) shadow_target.x -= offset_dist;
+                    else if (magic % 4 == 2) shadow_target.y += offset_dist;
+                    else                     shadow_target.y -= offset_dist;
+                    jobs[global_idx].target_pos = shadow_target;
+                    jobs[global_idx].target_z = z_mission;
+                }
             }
         }
         
@@ -1088,7 +1386,9 @@ private:
             // "Lazy" check: If unassigned and already at the shadow spot, just hold.
             if (!job.is_assigned && dist_to_target < 0.2) {
                  crazyflie_interfaces::msg::Position cmd;
-                 cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = job.target_z; cmd.yaw = 0.0;
+                 cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = job.target_z;
+                 // Face pole if search zone, otherwise hold yaw 0.
+                 cmd.yaw = job.has_search_yaw ? job.search_yaw : 0.0;
                  drone_path_cmds.push_back(cmd);
             } else {
                  // Plan path to the shadow spot to avoid obstacles
@@ -1109,6 +1409,11 @@ private:
                         else cmd.yaw = (drone_path_cmds.empty()) ? 0.0 : drone_path_cmds.back().yaw;
                         
                         drone_path_cmds.push_back(cmd);
+                    }
+                    // search.md step 5: face the pole when entering the
+                    // viewing zone. Override yaw on the final waypoint.
+                    if (job.has_search_yaw && !drone_path_cmds.empty()) {
+                        drone_path_cmds.back().yaw = job.search_yaw;
                     }
                  } else {
                     crazyflie_interfaces::msg::Position cmd;

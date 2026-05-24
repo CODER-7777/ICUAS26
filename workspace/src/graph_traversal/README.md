@@ -13,7 +13,7 @@ prediction  ──► occupancy_grid  ──► bfs  ──► move
  → topic)
 ```
 
-Plus `utils` (shared helpers) and `plot.py` (offline visualization).
+Plus `utils` (shared helpers), `plot.py` (offline visualization), and an obstacle-viewpoint `SearchManager` embedded inside `move.cpp` for inactive drone ArUco search.
 
 ---
 
@@ -101,7 +101,49 @@ Plus `utils` (shared helpers) and `plot.py` (offline visualization).
 
 ---
 
-## 5. `utils.cpp` / `utils.hpp` — Shared Utilities
+## 5. `SearchManager` — Obstacle-Viewpoint Search (inside `move.cpp`)
+
+**Purpose:** Converts inactive (bystanding) drones into active ArUco seekers. Instead of idly shadowing the nearest chain anchor, each inactive drone is *leashed* to an already-connected drone and sent to inspect obstacle-adjacent free cells ("viewpoints") it hasn't yet visited.
+
+### Key Types
+
+| Struct/Class | Lines | Purpose |
+|---|---|---|
+| `struct Viewpoint` | — | A free cell adjacent to an obstacle: `(x, y, yaw_out)` where `yaw_out` faces away from the obstacle wall |
+| `class SearchManager` | — | Builds viewpoints from the occupancy grid, tracks visited ones, and picks the closest unvisited viewpoint within a leash disk |
+| `struct LeashNode` | — | Node in the leash tree: drone ID, parent index (`-1` = active root), chain depth |
+
+### Functions
+
+| Signature | What it does |
+|---|---|
+| `void buildViewpoints(const nav_msgs::msg::OccupancyGrid& grid)` | Scans the grid: every **free** cell with at least one **occupied** 4-neighbor becomes a viewpoint. `yaw_out` = `atan2` of the mean outward vector toward the occupied neighbor(s). Computed once after `fetchOctomapOnce()`. |
+| `void markVisited(double x, double y)` | Marks all viewpoints within `visit_radius` as visited if the drone is on the correct (wall-facing) side. Called per drone per tick at the top of `handleMission()`. |
+| `bool nextViewpoint(double cx, double cy, double leash_r, double drone_x, double drone_y, Viewpoint& out)` | Returns the closest unvisited viewpoint inside the leash disk centered at `(cx, cy)` with radius `leash_r`. |
+| `std::vector<LeashNode> buildLeashTree(...)` | BFS-style: active drones are roots (depth 0). Each inactive drone connects to the nearest already-connected drone within `comm_range` whose depth `< max_inactive_chain_depth` (default 2). Inactive drones with no eligible parent fall through to legacy shadow logic. |
+
+### Data Flow in `handleMission()`
+
+1. Snapshot grid, targets, poses (unchanged).
+2. **NEW** `searchMgr_.markVisited(...)` for every drone.
+3. BMS classification + smart recall (unchanged).
+4. Bipartite matching (unchanged) → active vs inactive split.
+5. **NEW** `buildLeashTree(...)` connects inactive drones to the active chain.
+6. Build `jobs[]`: active → chain anchor; inactive → `searchMgr_.nextViewpoint()` (fallback shadow).
+7. **NEW** Override final waypoint yaw to `yaw_out + M_PI` (face the wall) when `has_search_yaw`.
+8. A* planning + atomic commit (unchanged).
+
+### ROS Parameters
+
+| Param | Default | Description |
+|---|---|---|
+| `visit_radius` | 1.5 m | Drone must be within this distance of a viewpoint to mark it visited |
+| `leash_margin` | 1.0 m | Subtracted from `comm_range` so the drone doesn't sit at the exact LOS edge |
+| `max_inactive_chain_depth` | 2 | Max depth of inactive sub-chain (1 = only children of active, 2 = allows grandchildren). Cap prevents fragile multi-hop chains. |
+
+---
+
+## 6. `utils.cpp` / `utils.hpp` — Shared Utilities
 
 | Signature | Line | What it does |
 |---|---|---|
@@ -113,7 +155,7 @@ Plus `utils` (shared helpers) and `plot.py` (offline visualization).
 
 ---
 
-## 6. `plot.py` — `plot_simulation_path()` (77 lines)
+## 7. `plot.py` — `plot_simulation_path()` (77 lines)
 
 **Purpose:** Offline visualization of logged path CSVs. Reads `path_log.csv`, plots AGV trace, communication chain, drones, base station, AGV. Saves `simulation_plot.png`.
 
@@ -146,27 +188,37 @@ Plus `utils` (shared helpers) and `plot.py` (offline visualization).
               └── z_target_pub_            → /mission/z_target
                             │
                             ▼
-                    move.cpp: SwarmPlanner
-                            │
-              ┌─────────────┼──────────────────┐
-              ▼             ▼                   ▼
-        handleTakeoff()  handleMission()   handleReturnToHome()
-              │             │                   │
-              │    ┌────────┴────────┐          │
-              │    ▼                 ▼          │
-              │  BMS Logic    Bipartite         │
-              │  (battery      Matching         │
-              │   check,       (canMatch +      │
-              │   charge       binary search)   │
-              │   trigger,                      │
-              │   recall)     A* Planning       │
-              │                 (bfs/A*)         │
-              │    ▼                            │
-              │  active_commands_               │
-              │         │                       │
-              └─────────┼───────────────────────┘
-                        ▼
-              publishCommands()  (20Hz)
+                     move.cpp: SwarmPlanner
+                             │
+               ┌─────────────┼──────────────────┐
+               ▼             ▼                   ▼
+         handleTakeoff()  handleMission()   handleReturnToHome()
+               │             │                   │
+               │    ┌────────┴────────┐          │
+               │    ▼                 ▼          │
+               │  markVisited   Bipartite        │
+               │  (SearchMgr)    Matching        │
+               │    │            (canMatch +     │
+               │    ▼            binary search)  │
+               │  BMS Logic      │               │
+               │  (battery    buildLeashTree     │
+               │   check,    (SearchMgr)         │
+               │   charge        │               │
+               │   trigger,  nextViewpoint       │
+               │   recall)   (SearchMgr)         │
+               │    │            │               │
+               │    └─────┬──────┘               │
+               │          ▼                      │
+               │     A* Planning                 │
+               │     (bfs/A*)                    │
+               │          │                      │
+               │  yaw override for search        │
+               │          ▼                      │
+               │  active_commands_               │
+               │         │                       │
+               └─────────┼───────────────────────┘
+                         ▼
+               publishCommands()  (20Hz)
                         │
                   applyRepulsion()
                   (velocity-damped collision avoidance)
