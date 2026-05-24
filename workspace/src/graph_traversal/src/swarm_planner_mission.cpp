@@ -1,5 +1,67 @@
 #include "swarm_planner.hpp"
 
+// Iterative target-separation enforcement. If two targets at similar
+// altitude sit closer than min_sep in XY, push them apart along the
+// connecting line until they're exactly min_sep apart. Iterating a few
+// times absorbs chains where moving A away from B brings A close to C.
+void SwarmPlanner::enforceTargetSeparation(geometry_msgs::msg::PoseArray& targets,
+                                           double min_sep, double z_thresh) {
+    if (min_sep <= 0.0) return;
+    const int max_iters = 6;
+    for (int iter = 0; iter < max_iters; ++iter) {
+        bool moved = false;
+        for (size_t i = 0; i + 1 < targets.poses.size(); ++i) {
+            for (size_t j = i + 1; j < targets.poses.size(); ++j) {
+                auto& a = targets.poses[i].position;
+                auto& b = targets.poses[j].position;
+                if (std::abs(a.z - b.z) > z_thresh) continue;
+                double dx = b.x - a.x;
+                double dy = b.y - a.y;
+                double d = std::hypot(dx, dy);
+                if (d >= min_sep) continue;
+                double ux, uy;
+                if (d < 1e-6) {
+                    ux = 1.0; uy = 0.0;
+                } else {
+                    ux = dx / d; uy = dy / d;
+                }
+                double need = (min_sep - d) * 0.5;
+                a.x -= ux * need; a.y -= uy * need;
+                b.x += ux * need; b.y += uy * need;
+                moved = true;
+            }
+        }
+        if (!moved) break;
+    }
+}
+
+// Drone planning priority (used by prioritized cooperative A*).
+// Higher = plans first; lower-priority drones must route around its path.
+//   30xx: charging-related (constrained vertical motion, plan first)
+//   20xx: actively assigned to a mission target
+//   10xx: idle / shadow position
+// Within each band, lower drone-id (cf_1) gets higher priority — gives
+// deterministic, tie-broken ordering.
+int SwarmPlanner::planPriority(const std::string& id, bool is_assigned) const {
+    int base;
+    auto it = battery_states_.find(id);
+    if (it != battery_states_.end()) {
+        const auto& bs = it->second;
+        if (bs.is_charging || bs.is_going_to_charge || bs.is_leaving_charger) {
+            base = 30;
+        } else if (is_assigned) {
+            base = 20;
+        } else {
+            base = 10;
+        }
+    } else {
+        base = is_assigned ? 20 : 10;
+    }
+    int magic = (id.size() > 3 && std::isdigit(static_cast<unsigned char>(id[3])))
+                    ? (id[3] - '0') : 9;
+    return base * 100 - magic;
+}
+
 bool SwarmPlanner::canMatch(int u, double threshold, const std::vector<std::vector<double>>& costs,
               std::vector<int>& match, std::vector<bool>& vis) {
     for (size_t v = 0; v < costs[0].size(); ++v) {
@@ -128,6 +190,14 @@ void SwarmPlanner::handleMission() {
 
     // z_mission from /mission/z_target topic (bfs publishes, updates on AGV loop)
     const double z_mission = has_z_target_ ? z_target_from_bfs_.load() : this->get_parameter("z_target").as_double();
+
+    // Pre-matching: nudge mission targets apart so two drones are never
+    // assigned to spots that overlap at the controller. Mutates the local
+    // copy only; upstream waypoint topic is untouched.
+    enforceTargetSeparation(
+        local_targets,
+        this->get_parameter("target_min_separation").as_double(),
+        this->get_parameter("reservation_z_threshold").as_double());
 
     const size_t num_drones = droneIds_.size();
     const size_t num_targets = local_targets.poses.size();
@@ -402,20 +472,26 @@ void SwarmPlanner::handleMission() {
                 jobs[global_idx].has_search_yaw = true;
                 jobs[global_idx].search_yaw = zn.yaw;
             } else {
-                // Fallback: legacy shadow logic (no reachable unvisited zone).
+                // Fallback shadow logic (no reachable unvisited zone). Old
+                // version used `magic % 4` which collides (e.g. cf_1 and
+                // cf_5 both pick -x), pinning two idle drones to the same
+                // XY. New version: 8 slots around each anchor, hashed by
+                // (anchor_idx + magic) so distinct drones sharing an
+                // anchor get distinct slots in steady state.
                 int best_anchor_idx = 0;
                 double min_dist = 1e9;
                 for (size_t k = 0; k < anchors.size(); ++k) {
                     double d = dist3D(current_pos, anchors[k]);
-                    if (d < min_dist) { min_dist = d; best_anchor_idx = k; }
+                    if (d < min_dist) { min_dist = d; best_anchor_idx = static_cast<int>(k); }
                 }
                 geometry_msgs::msg::Point shadow_target = anchors[best_anchor_idx];
-                double offset_dist = 2.0;
-                int magic = id[3] - '0';
-                if (magic % 4 == 0)      shadow_target.x += offset_dist;
-                else if (magic % 4 == 1) shadow_target.x -= offset_dist;
-                else if (magic % 4 == 2) shadow_target.y += offset_dist;
-                else                     shadow_target.y -= offset_dist;
+                const double offset_dist = 2.0;
+                int magic = (id.size() > 3 && std::isdigit(static_cast<unsigned char>(id[3])))
+                              ? (id[3] - '0') : 0;
+                int slot = ((magic - 1) + best_anchor_idx) & 0x7;
+                const double angle = (slot * M_PI) / 4.0;
+                shadow_target.x += offset_dist * std::cos(angle);
+                shadow_target.y += offset_dist * std::sin(angle);
                 jobs[global_idx].target_pos = shadow_target;
                 jobs[global_idx].target_z = z_mission;
             }
@@ -508,40 +584,74 @@ void SwarmPlanner::handleMission() {
 
     std::vector<std::pair<std::string, std::vector<crazyflie_interfaces::msg::Position>>> new_commands(droneIds_.size());
 
-    // Compute paths for assigned jobs
-    for (int i = 0; i < (int)droneIds_.size(); ++i) {
-        std::string id = droneIds_[i];
+    // --- Prioritized cooperative planning ---
+    // Drones plan one at a time in priority order. Each drone's smoothed
+    // path is inflated into a per-altitude reservation grid; subsequent
+    // drones treat it as an obstacle. Deterministic, no reactive nudging
+    // at the controller.
+    std::vector<size_t> plan_order(num_drones);
+    for (size_t k = 0; k < num_drones; ++k) plan_order[k] = k;
+    std::sort(plan_order.begin(), plan_order.end(), [&](size_t a, size_t b) {
+        return planPriority(droneIds_[a], jobs[a].is_assigned)
+             > planPriority(droneIds_[b], jobs[b].is_assigned);
+    });
 
-        // NOTE: We now generate commands for EVERYONE, including charging drones (to hold position)
-        // So no continue skip here.
+    const double reservation_radius = this->get_parameter("reservation_radius").as_double();
+    const double z_thresh           = this->get_parameter("reservation_z_threshold").as_double();
+    const int reservation_steps     = std::max(0, static_cast<int>(std::ceil(reservation_radius / local_grid.info.resolution)));
 
+    // Per-drone footprint, indexed by drone idx (matches `jobs`). Seeded
+    // with the drone's current position so even the first drone to plan
+    // sees every other drone as an obstacle. Once a drone plans, its
+    // entry is replaced with the smoothed path — strictly more accurate
+    // than the current-position seed.
+    std::vector<std::vector<geometry_msgs::msg::Point>> footprints(num_drones);
+    std::vector<double> footprint_z(num_drones);
+    for (size_t k = 0; k < num_drones; ++k) {
+        geometry_msgs::msg::Point p = local_poses[droneIds_[k]].pose.position;
+        footprints[k] = {p};
+        footprint_z[k] = jobs[k].target_z;
+    }
+
+    for (size_t order_idx = 0; order_idx < plan_order.size(); ++order_idx) {
+        size_t i = plan_order[order_idx];
         DroneJob& job = jobs[i];
         auto current_pos = local_poses[job.id].pose.position;
         std::vector<crazyflie_interfaces::msg::Position> drone_path_cmds;
+        std::vector<geometry_msgs::msg::Point> world_path;
 
         double dist_to_target = std::hypot(current_pos.x - job.target_pos.x, current_pos.y - job.target_pos.y);
 
-        // "Lazy" check: If unassigned and already at the shadow spot, just hold.
+        // "Lazy" check: unassigned drone already at its shadow/search spot — hold.
         if (!job.is_assigned && dist_to_target < 0.2) {
-             crazyflie_interfaces::msg::Position cmd;
-             cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = job.target_z;
-             // Face pole if search zone, otherwise hold yaw 0.
-             cmd.yaw = job.has_search_yaw ? job.search_yaw : 0.0;
-             drone_path_cmds.push_back(cmd);
+            crazyflie_interfaces::msg::Position cmd;
+            cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = job.target_z;
+            cmd.yaw = job.has_search_yaw ? job.search_yaw : 0.0;
+            drone_path_cmds.push_back(cmd);
+            geometry_msgs::msg::Point p; p.x = current_pos.x; p.y = current_pos.y; p.z = job.target_z;
+            world_path.push_back(p);
         } else {
-             // Plan path to the shadow spot to avoid obstacles
-             // Run A* Pipeline with explicit Z
-             auto path = runPlanningPipeline(local_grid, job.target_pos, current_pos, job.target_z);
+            // Build this drone's planning grid: base grid + every OTHER
+            // drone's footprint (within altitude band). Skipping self is
+            // essential — otherwise A* can't expand out of its start cell.
+            nav_msgs::msg::OccupancyGrid plan_grid = local_grid;
+            for (size_t j = 0; j < num_drones; ++j) {
+                if (j == i) continue;
+                if (std::abs(footprint_z[j] - job.target_z) > z_thresh) continue;
+                markPathReservation(plan_grid, footprints[j], reservation_steps);
+            }
 
-             // Smoothing / Post-Processing (omitted for brevity, assume path is usable)
-             if (!path.empty()) {
+            auto path = runPlanningPipeline(plan_grid, job.target_pos, current_pos, job.target_z);
+
+            if (!path.empty()) {
+                world_path = path;
                 for (size_t k = 0; k < path.size(); ++k) {
                     crazyflie_interfaces::msg::Position cmd;
                     cmd.x = path[k].x; cmd.y = path[k].y; cmd.z = job.target_z;
 
                     double dx, dy;
                     if (k == 0) { dx = path[k].x - current_pos.x; dy = path[k].y - current_pos.y; }
-                    else { dx = path[k].x - path[k-1].x; dy = path[k].y - path[k-1].y; }
+                    else        { dx = path[k].x - path[k-1].x;   dy = path[k].y - path[k-1].y; }
 
                     if (std::hypot(dx, dy) > 0.01) cmd.yaw = std::atan2(dy, dx);
                     else cmd.yaw = (drone_path_cmds.empty()) ? 0.0 : drone_path_cmds.back().yaw;
@@ -553,13 +663,19 @@ void SwarmPlanner::handleMission() {
                 if (job.has_search_yaw && !drone_path_cmds.empty()) {
                     drone_path_cmds.back().yaw = job.search_yaw;
                 }
-             } else {
+            } else {
+                // No path: hover and keep our seed-position footprint so
+                // others continue avoiding us.
                 crazyflie_interfaces::msg::Position cmd;
                 cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = job.target_z; cmd.yaw = 0.0;
                 drone_path_cmds.push_back(cmd);
-             }
+                geometry_msgs::msg::Point p; p.x = current_pos.x; p.y = current_pos.y; p.z = job.target_z;
+                world_path.push_back(p);
+            }
         }
+
         new_commands[i] = {job.id, drone_path_cmds};
+        footprints[i] = std::move(world_path);
     }
 
     // --- 3. Atomic Commit ---

@@ -6,6 +6,18 @@ SwarmPlanner::SwarmPlanner() : Node("Swarm_planner") {
     this->declare_parameter<double>("inflation_radius", 0.3);
     this->declare_parameter<double>("z_target", 1.0);
     this->declare_parameter<double>("max_speed", 12.0);
+
+    // Drone-drone separation tunables. Collision avoidance now happens at
+    // plan time via prioritized cooperative A*, not via reactive repulsion.
+    //   target_min_separation: pre-matching nudge so assigned waypoints are
+    //     never closer than this in XY (same altitude band).
+    //   reservation_radius: inflation around previously-planned drones'
+    //     paths when running prioritized A* — the per-drone "corridor" width.
+    //   reservation_z_threshold: only treat another drone's path as a
+    //     reservation when its z is within this band of ours.
+    this->declare_parameter<double>("target_min_separation", 1.0);
+    this->declare_parameter<double>("reservation_radius", 0.6);
+    this->declare_parameter<double>("reservation_z_threshold", 0.4);
     current_state_ = SwarmState::TAKEOFF;
     int N = get_num_robots();
     for (int i=1;i<=N;i++){
@@ -106,7 +118,7 @@ SwarmPlanner::SwarmPlanner() : Node("Swarm_planner") {
     timer_ = this->create_wall_timer(250ms, std::bind(&SwarmPlanner::runSwarmSystem, this), callback_group_);
 
     // Control loop stays at 20 Hz — it just re-publishes from
-    // active_commands_ with repulsion/speed clamp, which is cheap.
+    // active_commands_ with a speed clamp, which is cheap.
     control_timer_ = this->create_wall_timer(50ms, std::bind(&SwarmPlanner::publishCommands, this), callback_group_);
 
     initializeBMS();

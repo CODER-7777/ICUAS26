@@ -245,6 +245,51 @@ std::vector<idx> SwarmPlanner::bfs(idx start, idx end, const nav_msgs::msg::Occu
     return {};
 }
 
+// Inflate the line segments of a smoothed path into a planning grid as
+// occupied cells. Used by prioritized A*: each drone marks its planned path
+// so subsequent (lower-priority) drones treat it as a moving obstacle.
+// Sub-cell line sampling guarantees no holes between widely-spaced
+// line-of-sight waypoints.
+void SwarmPlanner::markPathReservation(nav_msgs::msg::OccupancyGrid& grid,
+                                       const std::vector<geometry_msgs::msg::Point>& path,
+                                       int inflation_steps) {
+    if (path.empty() || inflation_steps < 0) return;
+    const double res = grid.info.resolution;
+    const double ox = grid.info.origin.position.x;
+    const double oy = grid.info.origin.position.y;
+    const int w = grid.info.width;
+    const int h = grid.info.height;
+    const int r2 = inflation_steps * inflation_steps;
+
+    auto stamp = [&](double wx, double wy) {
+        int ci = static_cast<int>(std::floor((wx - ox) / res));
+        int cj = static_cast<int>(std::floor((wy - oy) / res));
+        for (int dy = -inflation_steps; dy <= inflation_steps; ++dy) {
+            for (int dx = -inflation_steps; dx <= inflation_steps; ++dx) {
+                if (dx*dx + dy*dy > r2) continue;
+                int nx = ci + dx;
+                int ny = cj + dy;
+                if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                    grid.data[ny * w + nx] = 100;
+                }
+            }
+        }
+    };
+
+    stamp(path[0].x, path[0].y);
+    for (size_t i = 1; i < path.size(); ++i) {
+        double sx = path[i-1].x, sy = path[i-1].y;
+        double ex = path[i].x,   ey = path[i].y;
+        double dx = ex - sx,     dy = ey - sy;
+        double seg_dist = std::hypot(dx, dy);
+        int steps = std::max(1, static_cast<int>(std::ceil(seg_dist / (res * 0.5))));
+        for (int s = 1; s <= steps; ++s) {
+            double t = static_cast<double>(s) / steps;
+            stamp(sx + dx * t, sy + dy * t);
+        }
+    }
+}
+
 std::vector<geometry_msgs::msg::Point> SwarmPlanner::runPlanningPipeline(
     const nav_msgs::msg::OccupancyGrid& map,
     geometry_msgs::msg::Point target,

@@ -132,6 +132,9 @@ private:
         geometry_msgs::msg::Point target,
         geometry_msgs::msg::Point current_pos,
         double target_z);
+    void markPathReservation(nav_msgs::msg::OccupancyGrid& grid,
+                             const std::vector<geometry_msgs::msg::Point>& path,
+                             int inflation_steps);
 
     // --- MAIN LOGIC ---
     bool canMatch(int u, double threshold, const std::vector<std::vector<double>>& costs,
@@ -141,12 +144,10 @@ private:
     void handleTakeoff();
     void handleMission();
     void handleReturnToHome();
+    void enforceTargetSeparation(geometry_msgs::msg::PoseArray& targets,
+                                 double min_sep, double z_thresh);
+    int planPriority(const std::string& id, bool is_assigned) const;
 
     // --- CONTROL ---
-    geometry_msgs::msg::Point applyRepulsion(
-        geometry_msgs::msg::Point target,
-        geometry_msgs::msg::Point current,
-        const std::map<std::string, geometry_msgs::msg::Point>& all_positions,
-        std::string my_id);
     void publishCommands();
 };

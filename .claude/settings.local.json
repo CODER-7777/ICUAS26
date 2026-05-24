@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//root/ros2_ws/src/icuas26_competition/launch/**)",
+      "Read(//tmp/**)",
+      "Read(//root/CrazySim/crazyflie-firmware/tools/crazyflie-simulation/simulator_files/gazebo/models/crazyflie/**)",
+      "Bash(ls /root/icuas26_competition/workspace/src/icuas26_competition/config/ 2>/dev/null; ls /root/ros2_ws/src/icuas26_competition/config/ 2>/dev/null)"
+    ]
+  }
+}
