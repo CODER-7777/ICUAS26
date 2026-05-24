@@ -57,6 +57,11 @@
    cv::Mat K;
    cv::Mat D;
    std::unordered_set<int> marker_seen;
+   // Throttling: only process one image per drone every `image_period_` seconds.
+   rclcpp::Time last_image_processed;
+   // Per-drone callback group so the 5 streams can run in parallel under the
+   // MultiThreadedExecutor without serialising on a single executor thread.
+   rclcpp::CallbackGroup::SharedPtr cb_group;
  };
  using DroneContextPtr = std::shared_ptr<DroneContext>;
  
@@ -87,73 +92,92 @@
  class MultiArucoDetector : public rclcpp::Node {
  public:
    MultiArucoDetector() : Node("multi_aruco_detector") {
-     // Config
-     marker_size_ = 0.25;
-     cf_ids_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
-     detection_timeout_ = 2.0; // seconds to wait for multi-drone detections
-     outlier_threshold_ = 2.5; // standard deviations for outlier rejection
- 
-     // ArUco
-     aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_5X5_250);
-     aruco_params_ = cv::aruco::DetectorParameters::create();
- 
-     rclcpp::QoS qos(rclcpp::KeepLast(100));
-     qos.reliable();
-     qos.transient_local();
-     qos.durability_volatile();
+    // Config
+    marker_size_ = 0.25;
+    cf_ids_ = {"cf_1", "cf_2", "cf_3", "cf_4", "cf_5"};
+    detection_timeout_ = 2.0; // seconds to wait for multi-drone detections
+    outlier_threshold_ = 2.5; // standard deviations for outlier rejection
+    image_period_ = 0.10;     // seconds; process at most ~10 Hz per drone
 
-     target_found_pub_ =
-          this->create_publisher<icuas25_msgs::msg::TargetInfo>(
-              "/target_found", qos);
-    //  target_found_pub_ =
-    //      this->create_publisher<icuas25_msgs::msg::TargetInfo>("/target_found", 10);
+    // ArUco
+    aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_5X5_250);
+    aruco_params_ = cv::aruco::DetectorParameters::create();
 
-     rth_state_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-         "RTH_STATE", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
-           rth_active_.store(msg->data);
-         });
- 
-     // Timer for periodic averaging and publishing
-     publish_timer_ = this->create_wall_timer(
-         std::chrono::milliseconds(500),
-         std::bind(&MultiArucoDetector::checkAndPublishPendingMarkers, this));
- 
-     // Per-drone setup
-     for (const auto &cf : cf_ids_) {
-       auto ctx = std::make_shared<DroneContext>();
-       ctx->cf = cf;
-       drones_[cf] = ctx;
- 
-       // Subscribers
-       auto sub_opt = rclcpp::SubscriptionOptions();
- 
-       image_subs_.push_back(this->create_subscription<sensor_msgs::msg::Image>(
-           std::string("/") + cf + "/image", rclcpp::SensorDataQoS(),
-           [this, cf](const sensor_msgs::msg::Image::SharedPtr msg) {
-             imageCb(msg, cf);
-           },
-           sub_opt));
- 
-       cam_info_subs_.push_back(
-           this->create_subscription<sensor_msgs::msg::CameraInfo>(
-               std::string("/") + cf + "/camera_info", 10,
-               [this, cf](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
-                 cameraInfoCb(msg, cf);
-               },
-               sub_opt));
- 
-       pose_subs_.push_back(
-           this->create_subscription<geometry_msgs::msg::PoseStamped>(
-               std::string("/") + cf + "/pose", 10,
-               [this, cf](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-                 poseCb(msg, cf);
-               },
-               sub_opt));  
-     }
- 
-     RCLCPP_INFO(this->get_logger(),
-                 "Multi-Drone ArUco Detector Started (C++)");
-   }
+    // Late-joining nodes (the scoring node) should still see every published
+    // marker. `transient_local` provides that; `KeepLast(30)` is plenty
+    // (max ~27 markers expected). `volatile` was being set right after
+    // `transient_local`, which silently overrode it — fixed here.
+    rclcpp::QoS qos(rclcpp::KeepLast(30));
+    qos.reliable();
+    qos.transient_local();
+
+    target_found_pub_ =
+         this->create_publisher<icuas25_msgs::msg::TargetInfo>(
+             "/target_found", qos);
+
+    // Match the publisher in move.cpp (transient_local + reliable). Necessary
+    // so we still see the latest RTH state if move.cpp published it before
+    // this node started subscribing.
+    {
+      auto rth_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+      rth_state_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+          "RTH_STATE", rth_qos,
+          [this](const std_msgs::msg::Bool::SharedPtr msg) {
+            rth_active_.store(msg->data);
+          });
+    }
+
+    // Timer for periodic averaging and publishing
+    publish_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(500),
+        std::bind(&MultiArucoDetector::checkAndPublishPendingMarkers, this));
+
+    // Per-drone setup
+    for (const auto &cf : cf_ids_) {
+      auto ctx = std::make_shared<DroneContext>();
+      ctx->cf = cf;
+      // One Reentrant group per drone. The MultiThreadedExecutor will dispatch
+      // callbacks from different groups concurrently, so image/camera/pose
+      // callbacks for cf_1 .. cf_5 can run in parallel on separate threads.
+      ctx->cb_group = this->create_callback_group(
+          rclcpp::CallbackGroupType::Reentrant);
+      ctx->last_image_processed = this->now();
+      drones_[cf] = ctx;
+
+      auto sub_opt = rclcpp::SubscriptionOptions();
+      sub_opt.callback_group = ctx->cb_group;
+
+      // Image QoS: best-effort + KeepLast(1) so the executor never queues up
+      // backlog frames if we fall behind for any reason.
+      auto image_qos = rclcpp::SensorDataQoS().keep_last(1);
+
+      image_subs_.push_back(this->create_subscription<sensor_msgs::msg::Image>(
+          std::string("/") + cf + "/image", image_qos,
+          [this, cf](const sensor_msgs::msg::Image::SharedPtr msg) {
+            imageCb(msg, cf);
+          },
+          sub_opt));
+
+      cam_info_subs_.push_back(
+          this->create_subscription<sensor_msgs::msg::CameraInfo>(
+              std::string("/") + cf + "/camera_info", 10,
+              [this, cf](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+                cameraInfoCb(msg, cf);
+              },
+              sub_opt));
+
+      pose_subs_.push_back(
+          this->create_subscription<geometry_msgs::msg::PoseStamped>(
+              std::string("/") + cf + "/pose", 10,
+              [this, cf](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+                poseCb(msg, cf);
+              },
+              sub_opt));  
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "Multi-Drone ArUco Detector Started (C++)");
+  }
  
  private:
    void cameraInfoCb(const sensor_msgs::msg::CameraInfo::SharedPtr msg,
@@ -181,18 +205,26 @@
        it->second->pose = msg;
    }
  
-   void imageCb(const sensor_msgs::msg::Image::SharedPtr msg,
-                const std::string &cf) {
-     DroneContextPtr ctx;
-     {
-       std::lock_guard<std::mutex> lock(mutex_);
-       auto it = drones_.find(cf);
-       if (it == drones_.end())
-         return;
-       ctx = it->second;
-       if (!ctx->pose || ctx->K.empty())
-         return;
-     }
+  void imageCb(const sensor_msgs::msg::Image::SharedPtr msg,
+               const std::string &cf) {
+    DroneContextPtr ctx;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = drones_.find(cf);
+      if (it == drones_.end())
+        return;
+      ctx = it->second;
+      if (!ctx->pose || ctx->K.empty())
+        return;
+      // Per-drone throttle: drop frames that arrive within `image_period_`s
+      // of the last processed one. ArUco doesn't need 30 Hz, and detect+pose
+      // is the single most expensive thing this node does.
+      double since_last = (this->now() - ctx->last_image_processed).seconds();
+      if (since_last < image_period_) {
+        return;
+      }
+      ctx->last_image_processed = this->now();
+    }
  
      cv_bridge::CvImageConstPtr cv_ptr;
      try {
@@ -253,10 +285,12 @@
      // Calculate distance from drone to marker for weighted averaging
      double distance = std::sqrt(mx_w * mx_w + my_w * my_w + mz_w * mz_w);
  
-     storeDetection(marker_id, cf, world_x, world_y, world_z, distance);
-     RCLCPP_INFO(this->get_logger(), "[%s] Marker %d @ (%.2f, %.2f, %.2f)",
+    storeDetection(marker_id, cf, world_x, world_y, world_z, distance);
+    // Was per-detection INFO at image rate. Throttle to avoid logger lock
+    // contention dominating CPU when a drone hovers in front of a marker.
+    RCLCPP_DEBUG(this->get_logger(), "[%s] Marker %d @ (%.2f, %.2f, %.2f)",
                  cf.c_str(), marker_id, world_x, world_y, world_z);
-   }
+  }
  
    void storeDetection(int marker_id, const std::string &drone_id, double x,
                        double y, double z, double distance) {
@@ -418,8 +452,9 @@
      agg.last_published_count = agg.detections.size();
    }
  
-   double marker_size_;
-   std::vector<std::string> cf_ids_;
+  double marker_size_;
+  double image_period_;
+  std::vector<std::string> cf_ids_;
    cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
    cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
  
@@ -444,10 +479,16 @@
    std::mutex mutex_;
  };
  
- int main(int argc, char **argv) {
-   rclcpp::init(argc, argv);
-   auto node = std::make_shared<MultiArucoDetector>();
-   rclcpp::spin(node);
-   rclcpp::shutdown();
-   return 0;
- }
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<MultiArucoDetector>();
+  // MultiThreadedExecutor with one thread per drone (5) + spare for the
+  // publish timer / RTH sub. Combined with per-drone Reentrant callback
+  // groups, the 5 image streams can do ArUco detection in parallel instead
+  // of being serialised on a single executor thread.
+  rclcpp::executors::MultiThreadedExecutor exec(rclcpp::ExecutorOptions(), 6);
+  exec.add_node(node);
+  exec.spin();
+  rclcpp::shutdown();
+  return 0;
+}

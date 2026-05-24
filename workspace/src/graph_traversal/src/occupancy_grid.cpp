@@ -12,15 +12,15 @@ class OctomapToPlane : public rclcpp::Node {
 public:
     OctomapToPlane() : Node("octomap_plane_extractor") {
         this->declare_parameter<double>("z_target", 1.0);
-        this->declare_parameter<double>("update_period", 2.0);
+        this->declare_parameter<double>("retry_period", 2.0);
         this->declare_parameter<std::string>("frame_id", "map");
 
         auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local();
         publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("map_slice", qos);
-
+        
         client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary");
 
-        double period = this->get_parameter("update_period").as_double();
+        double period = this->get_parameter("retry_period").as_double();
         timer_ = this->create_wall_timer(
             std::chrono::duration<double>(period),
             std::bind(&OctomapToPlane::timerCallback, this));
@@ -35,12 +35,10 @@ private:
             return;
         }
         auto request = std::make_shared<octomap_msgs::srv::GetOctomap::Request>();
-
-        // Corrected async_send_request call for ROS 2 Humble
+        
         client_->async_send_request(request, std::bind(&OctomapToPlane::handleResponse, this, std::placeholders::_1));
     }
 
-    // Corrected SharedFuture type signature
     void handleResponse(rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedFuture future) {
         auto response = future.get();
         if (!response) {
@@ -59,23 +57,22 @@ private:
         tree->getMetricMin(minX, minY, minZ);
         tree->getMetricMax(maxX, maxY, maxZ);
 
-        octomap::point3d bbx_min(minX, minY, z_target - res / 2.0);
-        octomap::point3d bbx_max(maxX, maxY, z_target + res / 2.0);
+        octomap::point3d bbx_min(minX, minY, z_target - res/2.0);
+        octomap::point3d bbx_max(maxX, maxY, z_target + res/2.0);
 
-        std::vector<std::pair<int, int> > occupied_points;
+        std::vector<std::pair<int, int>> occupied_points;
         int minGx = 2e9, maxGx = -2e9, minGy = 2e9, maxGy = -2e9;
 
         for (auto it = tree->begin_leafs_bbx(bbx_min, bbx_max); it != tree->end_leafs_bbx(); ++it) {
             if (tree->isNodeOccupied(*it)) {
                 int gx = static_cast<int>(std::floor(it.getX() / res));
                 int gy = static_cast<int>(std::floor(it.getY() / res));
-
+                
                 occupied_points.push_back({gx, gy});
-
-                // Fixed indentation/logic for min/max tracking
-                if (gx < minGx) minGx = gx;
+                
+                if (gx < minGx) minGx = gx; 
                 if (gx > maxGx) maxGx = gx;
-                if (gy < minGy) minGy = gy;
+                if (gy < minGy) minGy = gy; 
                 if (gy > maxGy) maxGy = gy;
             }
         }
@@ -97,11 +94,11 @@ private:
         ros_map.info.origin.position.x = minGx * res;
         ros_map.info.origin.position.y = minGy * res;
         ros_map.info.origin.position.z = z_target;
-        ros_map.data.assign(width * height, 0);
+        ros_map.data.assign(width * height, 0); 
 
         cv::Mat grid_img = cv::Mat::zeros(height, width, CV_8U);
 
-        for (const auto &pt: occupied_points) {
+        for (const auto& pt : occupied_points) {
             int lx = pt.first - minGx;
             int ly = pt.second - minGy;
 
@@ -112,10 +109,12 @@ private:
             }
         }
 
-        // Output results
         publisher_->publish(ros_map);
         cv::imwrite("latest_plane_slice.png", grid_img);
         RCLCPP_INFO(this->get_logger(), "Published: %d x %d at Z=%.2f", width, height, z_target);
+
+        RCLCPP_INFO(this->get_logger(), "OctoMap processed. Cancelling timer.");
+        if (timer_) timer_->cancel();
     }
 
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr publisher_;
@@ -123,7 +122,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 };
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<OctomapToPlane>());
     rclcpp::shutdown();
