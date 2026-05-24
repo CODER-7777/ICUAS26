@@ -17,7 +17,7 @@ public:
             "octomap_binary_topic", rclcpp::QoS(1).transient_local());
 
         timer_ = this->create_wall_timer(
-            500ms, std::bind(&OctomapServiceToTopic::timerCallback, this));
+            2s, std::bind(&OctomapServiceToTopic::timerCallback, this));
 
         RCLCPP_INFO(this->get_logger(), "Octomap service → topic bridge started");
     }
@@ -41,6 +41,8 @@ private:
                 auto response = future.get();
                 if (response) {
                     pub_->publish(response->map);
+                    RCLCPP_INFO(this->get_logger(), "OctoMap received and published. Cancelling timer.");
+                    if (timer_) timer_->cancel();
                 }
             });
     }

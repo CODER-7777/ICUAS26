@@ -12,7 +12,7 @@ class OctomapToPlane : public rclcpp::Node {
 public:
     OctomapToPlane() : Node("octomap_plane_extractor") {
         this->declare_parameter<double>("z_target", 1.0);
-        this->declare_parameter<double>("update_period", 2.0);
+        this->declare_parameter<double>("retry_period", 2.0);
         this->declare_parameter<std::string>("frame_id", "map");
 
         auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local();
@@ -20,7 +20,7 @@ public:
         
         client_ = this->create_client<octomap_msgs::srv::GetOctomap>("octomap_binary");
 
-        double period = this->get_parameter("update_period").as_double();
+        double period = this->get_parameter("retry_period").as_double();
         timer_ = this->create_wall_timer(
             std::chrono::duration<double>(period),
             std::bind(&OctomapToPlane::timerCallback, this));
@@ -36,11 +36,9 @@ private:
         }
         auto request = std::make_shared<octomap_msgs::srv::GetOctomap::Request>();
         
-        // Corrected async_send_request call for ROS 2 Humble
         client_->async_send_request(request, std::bind(&OctomapToPlane::handleResponse, this, std::placeholders::_1));
     }
 
-    // Corrected SharedFuture type signature
     void handleResponse(rclcpp::Client<octomap_msgs::srv::GetOctomap>::SharedFuture future) {
         auto response = future.get();
         if (!response) {
@@ -72,7 +70,6 @@ private:
                 
                 occupied_points.push_back({gx, gy});
                 
-                // Fixed indentation/logic for min/max tracking
                 if (gx < minGx) minGx = gx; 
                 if (gx > maxGx) maxGx = gx;
                 if (gy < minGy) minGy = gy; 
@@ -112,10 +109,12 @@ private:
             }
         }
 
-        // Output results
         publisher_->publish(ros_map);
         cv::imwrite("latest_plane_slice.png", grid_img);
         RCLCPP_INFO(this->get_logger(), "Published: %d x %d at Z=%.2f", width, height, z_target);
+
+        RCLCPP_INFO(this->get_logger(), "OctoMap processed. Cancelling timer.");
+        if (timer_) timer_->cancel();
     }
 
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr publisher_;
