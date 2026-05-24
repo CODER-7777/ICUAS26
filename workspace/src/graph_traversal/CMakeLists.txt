@@ -23,7 +23,17 @@ find_package(std_msgs REQUIRED)
 
 add_executable(bfs src/bfs.cpp src/utils.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
-add_executable(move src/move.cpp src/utils.cpp)
+add_executable(move
+  src/move.cpp
+  src/utils.cpp
+  src/search_manager.cpp
+  src/swarm_planner_init.cpp
+  src/swarm_planner_grid.cpp
+  src/swarm_planner_mission.cpp
+  src/swarm_planner_bms.cpp
+  src/swarm_planner_rth.cpp
+  src/swarm_planner_control.cpp
+)
 add_executable(prediction src/prediction.cpp)
 
 ament_target_dependencies(bfs  rclcpp octomap octomap_msgs nav2_msgs std_msgs)
