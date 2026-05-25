@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /root/.claude/projects/-root-icuas26-competition/memory/ 2>/dev/null)"
+    ]
+  }
+}
