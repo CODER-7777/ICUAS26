@@ -124,21 +124,21 @@ private:
         }
 
         // AGV loop detection: raise altitude when AGV returns to start
-        double dist_to_start = std::hypot(target.x - agv_start_pos_.x, target.y - agv_start_pos_.y);
-        if (!agv_away_from_start_ && dist_to_start > 3.0) {
-            agv_away_from_start_ = true;
-            RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
-        }
-        if (agv_away_from_start_ && dist_to_start < LOOP_DETECTION_RADIUS) {
-            agv_loop_count_++;
-            agv_away_from_start_ = false;
-            double current_z = this->get_parameter("z_target").as_double();
-            double maxD = this->get_parameter("max_dist").as_double();
-            double new_z = std::min(current_z + z_step_.load(), maxD);
-            this->set_parameter(rclcpp::Parameter("z_target", new_z));
-            RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.2f m (capped at max_dist)",
-                agv_loop_count_, new_z);
-        }
+        // double dist_to_start = std::hypot(target.x - agv_start_pos_.x, target.y - agv_start_pos_.y);
+        // if (!agv_away_from_start_ && dist_to_start > 3.0) {
+        //     agv_away_from_start_ = true;
+        //     RCLCPP_INFO(this->get_logger(), "AGV moved away from start, loop detection active");
+        // }
+        // if (agv_away_from_start_ && dist_to_start < LOOP_DETECTION_RADIUS) {
+        //     agv_loop_count_++;
+        //     agv_away_from_start_ = false;
+        //     double current_z = this->get_parameter("z_target").as_double();
+        //     double maxD = this->get_parameter("max_dist").as_double();
+        //     double new_z = std::min(current_z + z_step_.load(), maxD);
+        //     this->set_parameter(rclcpp::Parameter("z_target", new_z));
+        //     RCLCPP_INFO(this->get_logger(), "AGV Loop %d completed! Raising altitude to %.2f m (capped at max_dist)",
+        //         agv_loop_count_, new_z);
+        // }
 
         auto path = runPlanningPipeline(cached_grid_, target);
 
