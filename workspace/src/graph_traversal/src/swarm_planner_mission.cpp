@@ -426,17 +426,21 @@ void SwarmPlanner::handleMission() {
     // But we only fill "jobs" based on available list + special handling for charging
 
 
-    // 4a. Build list of "Connection Anchors" (Base + Active Targets)
+    // 4a. Build list of "Connection Anchors" (Base + Active Drone Positions)
+    // Used by fallback shadow logic to place idle drones near real drone
+    // positions rather than abstract waypoint targets.
     std::vector<geometry_msgs::msg::Point> anchors;
 
-    // Anchor 0: Base Station (Always connected)
     geometry_msgs::msg::Point base;
     base.x = 0.0; base.y = 0.0; base.z = z_mission;
     anchors.push_back(base);
 
-    // Add all active mission targets as anchors
-    for(const auto& pose : local_targets.poses) {
-        anchors.push_back(pose.position);
+    for (const auto& kv : drone_to_target) {
+        const std::string& aid = available_drones[kv.first];
+        auto pit = local_poses.find(aid);
+        if (pit != local_poses.end()) {
+            anchors.push_back(pit->second.pose.position);
+        }
     }
 
     // A. Process AVAILABLE DRONES
