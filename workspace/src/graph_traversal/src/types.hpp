@@ -3,6 +3,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <cstdint>
 #include <functional>
+#include <chrono>
 
 struct idx { int i, j; };
 
@@ -42,4 +43,5 @@ struct ViewZone {
     int dir_idx;          // 0..3 cardinal (E,N,W,S)
     int height_idx;       // 0 = low (25%), 1 = high (75%)
     bool visited = false;
+    std::chrono::steady_clock::time_point dwell_start_{};
 };

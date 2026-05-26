@@ -23,7 +23,7 @@ std::string get_charging_file(){
 double get_comm_range(){
     const char* env_p = std::getenv("COMM_RANGE");
     if (env_p) {
-        return std::stod(env_p);
+        return std::stod(env_p)*0.9;
     } else {
         return 70;
     }

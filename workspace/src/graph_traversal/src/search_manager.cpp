@@ -117,6 +117,7 @@ void SearchManager::buildFromOctomap(const octomap::OcTree& tree) {
 }
 
 void SearchManager::markVisited(double x, double y, double z) {
+    auto now = std::chrono::steady_clock::now();
     for (auto& zn : zones_) {
         if (zn.visited) continue;
         double dx = zn.x - x;
@@ -131,7 +132,15 @@ void SearchManager::markVisited(double x, double y, double z) {
         double drone_off_x = x - p.cx;
         double drone_off_y = y - p.cy;
         if (zone_off_x * drone_off_x + zone_off_y * drone_off_y <= 0.0) continue;
-        zn.visited = true;
+        // Dwell: on first arrival start the timer; mark visited only after
+        // dwell_time_sec_ has elapsed, giving the drone time to observe.
+        if (zn.dwell_start_ == std::chrono::steady_clock::time_point{}) {
+            zn.dwell_start_ = now;
+        }
+        auto elapsed = std::chrono::duration<double>(now - zn.dwell_start_).count();
+        if (elapsed >= dwell_time_sec_) {
+            zn.visited = true;
+        }
     }
 }
 
