@@ -100,6 +100,9 @@ SwarmPlanner::SwarmPlanner() : Node("Swarm_planner") {
         mission_drone_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission_done", qos);
     }
 
+    // Drone role publisher: comma-separated "id:ROLE" pairs, updated every planning tick.
+    drone_role_pub_ = this->create_publisher<std_msgs::msg::String>("/drone_roles", 10);
+
 
     // 4. Timers
     // Init: Get map once. Cancels itself after the map arrives instead of

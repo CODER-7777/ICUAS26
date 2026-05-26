@@ -68,8 +68,9 @@ Plus `utils` (shared helpers), `plot.py` (offline visualization), and a standalo
 ```
                           ┌──────────────────────────────────────────┐
                           │            types.hpp                     │
-                          │  (idx, DroneBatteryState, AStarNode,     │
-                          │   SwarmState, PoleInfo, ViewZone)        │
+                           │  (idx, DroneBatteryState, AStarNode,     │
+                           │   SwarmState, DroneRole, PoleInfo,       │
+                           │   ViewZone)                               │
                           └──────────┬───────────────────────┬───────┘
                                      │                       │
                           ┌──────────▼──────────┐   ┌───────▼────────┐
@@ -110,11 +111,13 @@ Defines all data structures used across the swarm modules so every file sees the
 - **`DroneBatteryState`** — per-drone battery FSM state: `percentage`, `has_charged` (one-shot flag), `is_charging`/`is_going_to_charge`/`is_leaving_charger` (three-way charge state), `assigned_slot`, `start_charge_percentage`, and `start_leaving_time` for the clearance timeout.
 - **`AStarNode`** — priority queue element for the A* planner: packs `idx_flat` + `f_score` with `operator>` for `std::priority_queue` min-heap.
 - **`SwarmState`** — top-level state machine: `TAKEOFF → MISSION → RETURN_TO_HOME`.
+- **`DroneRole`** — per-drone role enum: `SEARCH` (idle, assigned to pole viewing zones), `CHAIN_COMPONENT` (part of the relay chain between base station and AGV), `RTH` (returning to base), `LANDING` (executing landing descent). Roles are assigned every tick in `handleMission()` and `handleReturnToHome()`.
 - **`PoleInfo`/`ViewZone`** — pole geometry and per-pole viewing zones used by `SearchManager` for ArUco search.
 
 #### `swarm_planner.hpp` — Central class declaration
 Declares the entire `SwarmPlanner` class inheriting `rclcpp::Node`:
 - All private member variables (subscribers, publishers, clients, timers, state variables, battery maps, charging slots, `SearchManager` instance).
+- `std::map<std::string, DroneRole> drone_roles_` — per-drone role tracker, updated every tick by `handleMission()` and `handleReturnToHome()` to reflect current drone assignment.
 - Method declarations for every function (split across the 6 `.cpp` files).
 - Inline `dist2D()` / `dist3D()` helpers — trivial enough that inlining avoids call overhead and keeps them visible to all translation units.
 
@@ -132,7 +135,8 @@ Handles everything that runs once at startup:
    - `/AGV/pose` — AGV position for loop counting.
 5. Creates service clients: OctoMap `GetOctomap`, per-drone `Land`/`Takeoff`.
 6. Creates publishers: `RTH_STATE` (transient_local, only on transitions), `/mission_done`.
-7. Fires three timers:
+7. Creates `/drone_roles` publisher (`std_msgs::msg::String`, 10 Hz) — publishes comma-separated `id:ROLE` pairs every planning tick for monitoring and visualization.
+8. Fires three timers:
    - **`init_timer_`** (500 ms, self-cancelling) — polls OctoMap until the first map arrives.
    - **`timer_`** (250 ms, 4 Hz) — `runSwarmSystem()`: the heavy planning tick.
    - **`control_timer_`** (50 ms, 20 Hz) — `publishCommands()`: lightweight repulsion + output.
@@ -192,10 +196,11 @@ The orchestration layer — decides what each drone does every planning tick (4 
 4. **BMS classification** — iterates all drones: those already charging/going/leaving go to the `charging_drones` list; the rest check battery ≤ 70% → if a slot is free and concurrency limit (2) isn't reached, the drone is sent to charge. Remaining drones go to `available_drones`.
 5. **Smart recall** — if `available_drones.size() < num_targets`, recalls the highest-battery charging drone(s) if they've gained ≥10% charge (or if there are zero available).
 6. **Emergency check** — any battery under 25% triggers immediate `RETURN_TO_HOME`.
-7. **Bipartite matching** — builds a cost matrix (3D distance), binary-searches over sorted distances to find the minimum threshold that achieves a full match via `canMatch()`.
-8. **Job building** — for available drones: matched ones get a mission target; unmatched (idle) ones get a search zone via `search_mgr_.pickNextZone()` or failover to a shadow anchor. For charging drones: clearance maneuver, slot approach, or hold-at-slot depending on substate.
-9. **A* planning** — calls `runPlanningPipeline()` for every drone job, builds command waypoint lists with yaw overrides for search zones.
-10. **Atomic commit** — swaps `active_commands_` under the mutex so the 20 Hz control loop sees a consistent state.
+7. **Role initialization** — all drones set to `SEARCH`; overridden per assignment below.
+8. **Bipartite matching** — builds a cost matrix (3D distance), binary-searches over sorted distances to find the minimum threshold that achieves a full match via `canMatch()`.
+9. **Job building + role assignment** — for available drones: matched ones get `CHAIN_COMPONENT` + mission target; unmatched (idle) ones stay `SEARCH` and get a search zone via `search_mgr_.pickNextZone()` or failover to a shadow anchor. For charging drones: `RTH` (en route) or `LANDING` (on slot) + clearance maneuver, slot approach, or hold-at-slot depending on substate.
+10. **A* planning** — calls `runPlanningPipeline()` for every drone job, builds command waypoint lists with yaw overrides for search zones.
+11. **Atomic commit** — swaps `active_commands_` under the mutex so the 20 Hz control loop sees a consistent state.
 
 #### `swarm_planner_bms.cpp` — Battery charging FSM
 A single function `handleBatteryLogic(id)` called per-drone per tick:
@@ -207,13 +212,13 @@ A single function `handleBatteryLogic(id)` called per-drone per tick:
 Slot management is handled in `handleMission()` (assignment, recall, late release).
 
 #### `swarm_planner_rth.cpp` — Sequential return to home
-Handles the `RETURN_TO_HOME` state:
+Handles the `RETURN_TO_HOME` state. Assigns roles each tick:
 
 1. **First call only** — sorts all drones by battery percentage (ascending: lowest first) into `rth_sorted_ids_`.
 2. **Sequential dispatch** — `rth_index_` tracks which drone is actively returning:
-   - Drones **before** `rth_index_` → already landed, commanded to `z = 0.05` at home.
-   - Drones **after** `rth_index_` → waiting, hover in place.
-   - Drone at `rth_index_` → navigates home via A*; when within 0.2 m (2D) and Z < 0.15 m, increments `rth_index_`.
+   - Drones **before** `rth_index_` → already landed, role `LANDING`, commanded to `z = 0.05` at home.
+   - Drones **after** `rth_index_` → waiting, role `RTH`, hover in place.
+   - Drone at `rth_index_` → role `RTH` (navigating) or `LANDING` (arrived), navigates home via A*; when within 0.2 m (2D) and Z < 0.15 m, increments `rth_index_`.
 3. **Final landing** — when `rth_index_ >= N`: calls the Land service for all drones, then publishes `/mission_done = true` (one-shot).
 
 #### `swarm_planner_control.cpp` — Real-time control output
@@ -243,6 +248,7 @@ Minimal: calls `rclcpp::init`, creates a `SwarmPlanner` node, spins on a `MultiT
 | `struct DroneBatteryState { float percentage; bool has_charged; ... }` | `types.hpp` | Per-drone battery: percentage, charging flags, assigned slot, charge timer |
 | `struct AStarNode { int idx_flat; int f_score; bool operator>(...) const; }` | `types.hpp` | Priority queue node: flat index + f_score (min-heap via `operator>`) |
 | `enum class SwarmState { TAKEOFF, MISSION, RETURN_TO_HOME }` | `types.hpp` | State machine enum |
+| `enum class DroneRole { RTH, LANDING, CHAIN_COMPONENT, SEARCH }` | `types.hpp` | Per-drone role: chain component, search, RTH, or landing. Assigned every tick by `handleMission()` / `handleReturnToHome()` |
 | `struct DroneJob { std::string id; bool is_assigned; ... }` | `swarm_planner_mission.cpp` | Job descriptor: drone ID, assigned flag, target position/z |
 | `struct DroneCmd { std::string id; std::vector<...> waypoints; }` | `swarm_planner_control.cpp` | Batch command buffer: ID + waypoint list |
 
@@ -259,20 +265,22 @@ Minimal: calls `rclcpp::init`, creates a `SwarmPlanner` node, spins on a `MultiT
 | `std::vector<idx> bfs(...)` | `swarm_planner_grid.cpp` | Actually **A\*** (naming mismatch). Uses `thread_local` visited-token trick to avoid reallocation; 8-connected, lazy skipping, priority queue with Chebyshev heuristic `max(\|dx\|, \|dy\|)` |
 | `std::vector<...> runPlanningPipeline(...)` | `swarm_planner_grid.cpp` | Calls A*, then greedily jumps via LOS to reduce waypoints (no 3D first/last special case like bfs.cpp) |
 | `bool canMatch(...)` | `swarm_planner_mission.cpp` | **DFS augmenting path** for bipartite matching (Hungarian-like); checks if drone `u` can match to a target within `threshold` |
-| `void runSwarmSystem()` | `swarm_planner_mission.cpp` | **Main entry point @ 4 Hz:** gates on poses + map ready; dispatches to `handleTakeoff()`, `handleMission()`, or `handleReturnToHome()`; publishes RTH state on transitions only |
+| `void runSwarmSystem()` | `swarm_planner_mission.cpp` | **Main entry point @ 4 Hz:** gates on poses + map ready; dispatches to `handleTakeoff()`, `handleMission()`, or `handleReturnToHome()`; publishes RTH state on transitions only; publishes `/drone_roles` topic with current role of every drone |
 | `void handleBatteryLogic(...)` | `swarm_planner_bms.cpp` | Per-drone battery FSM: (1) if charging and ≥88% → switch to `is_leaving_charger`; (2) if going-to-charge and within 0.1m of slot → switch to `is_charging` |
 | `void handleTakeoff()` | `swarm_planner_mission.cpp` | Calls takeoff service for all drones, waits for all to reach z_target, transitions to MISSION |
-| `void handleMission()` | `swarm_planner_mission.cpp` | **Core mission logic:** 1) AGV loop detection; 2) Snapshot grid/targets/poses; 3) BMS: classify available vs charging, trigger low-battery (≤70%) charging, smart recall (≥10% gain or no available drones); 4) Emergency RTH if any battery <25%; 5) **Bipartite matching** via binary search + DFS augmenting paths; 6) Build jobs: assigned → target, idle → shadow anchor, charging → slot approach/land; 7) A* planning; 8) Atomic commit to `active_commands_` |
-| `void handleReturnToHome()` | `swarm_planner_rth.cpp` | **Sequential return** (lowest battery first): drones before `rth_index_` stay landed, after hover, active navigates home via A*; increments index when z<0.15; at end → land service + `/mission_done = true` |
+| `void handleMission()` | `swarm_planner_mission.cpp` | **Core mission logic:** 1) AGV loop detection; 2) Snapshot grid/targets/poses; 3) BMS: classify available vs charging, trigger low-battery (≤70%) charging, smart recall (≥10% gain or no available drones); 4) Emergency RTH if any battery <25%; 5) **Role init** → all drones default to `SEARCH`; 6) **Bipartite matching** via binary search + DFS augmenting paths → matched drones get `CHAIN_COMPONENT`; 7) Build jobs: `CHAIN_COMPONENT` → target, `SEARCH` → search zone/shadow anchor, `RTH`/`LANDING` → charge slot/clearance; 8) A* planning; 9) Atomic commit to `active_commands_` |
+| `void handleReturnToHome()` | `swarm_planner_rth.cpp` | **Sequential return** (lowest battery first): drones before `rth_index_` stay landed (`LANDING`), after hover (`RTH`), active navigates home (`RTH` → `LANDING`); increments index when z<0.15; at end → land service + `/mission_done = true` |
 | `geometry_msgs::msg::Point applyRepulsion(...)` | `swarm_planner_control.cpp` | **Velocity-damped collision avoidance:** proportional push + derivative damping for neighbors within `safe_radius` (0.7m, 0.0 during RTH); clamps max shift to 0.5m |
 | `void publishCommands()` | `swarm_planner_control.cpp` | **Control loop @ 20 Hz:** snapshots commands/poses, estimates velocity (finite difference), picks next waypoint, applies repulsion, clamps step to `max_speed * dt`, publishes to `/cf_X/cmd_position` |
+| `const char* roleToString(DroneRole r)` | `swarm_planner_mission.cpp` | Converts `DroneRole` enum to human-readable string (`SEARCH`, `CHAIN_COMPONENT`, `RTH`, `LANDING`) |
+| `void publishRoles()` | `swarm_planner_mission.cpp` | Builds a comma-separated `id:ROLE` string for all drones and publishes to `/drone_roles` |
 | `int main(int argc, char** argv)` | `move.cpp` | Spins with `MultiThreadedExecutor` |
 
 ---
 
 ## 5. `SearchManager` — Pole-based ArUco Search (`search_manager.hpp` / `search_manager.cpp`)
 
-**Purpose:** Converts inactive (bystanding) drones into active ArUco seekers. Instead of idly shadowing the nearest chain anchor, each inactive drone inspects per-pole viewing zones it hasn't yet visited.
+**Purpose:** Converts inactive (non-chain) drones into active ArUco seekers. Instead of idly shadowing the nearest chain anchor, each drone with role `SEARCH` inspects per-pole viewing zones it hasn't yet visited. Drones assigned to the relay chain (`CHAIN_COMPONENT`), returning to base (`RTH`), or landing (`LANDING`) are excluded from search task assignment.
 
 ### Key Types
 
@@ -291,16 +299,18 @@ Minimal: calls `rclcpp::init`, creates a `SwarmPlanner` node, spins on a `MultiT
 | `int pickNextZone(double drone_x, double drone_y, double drone_z, const std::vector<...>& anchors, double comm_range, const std::function<bool(...)>& losCheck)` | Returns the index of the nearest unvisited zone that has line-of-sight to at least one anchor (drone or base station). Returns -1 if no valid zone exists. |
 | `bool allVisited() const` | Returns true iff all zones have been visited. |
 
-### Data Flow in `handleMission()`
+### Data Flow in `handleMission()` (role-aware)
 
 1. Snapshot grid, targets, poses (unchanged).
-2. `searchMgr_.markVisited(...)` for every drone.
+2. `searchMgr_.markVisited(...)` for every drone (any drone can mark a zone visited).
 3. BMS classification + smart recall (unchanged).
-4. Bipartite matching (unchanged) → active vs idle split.
-5. Idle drones: `searchMgr_.pickNextZone()` with LOS callback checking the 2D grid.
-6. Build `jobs[]`: active → target; idle → zone target (fallback shadow anchor).
-7. Override final waypoint yaw to face the pole when `has_search_yaw`.
-8. A* planning + atomic commit (unchanged).
+4. **Role initialization** — all drones default to `SEARCH`.
+5. Bipartite matching (unchanged) → matched drones get `CHAIN_COMPONENT` role.
+6. Idle (unmatched) drones stay `SEARCH`: `searchMgr_.pickNextZone()` with LOS callback checking the 2D grid.
+7. Charging drones → `RTH` (en route) or `LANDING` (on slot).
+8. Build `jobs[]`: `CHAIN_COMPONENT` → target; `SEARCH` → zone target (fallback shadow anchor); `RTH`/`LANDING` → charge slot/clearance.
+9. Override final waypoint yaw to face the pole when `has_search_yaw`.
+10. A* planning + atomic commit (unchanged).
 
 ### ROS Parameters
 

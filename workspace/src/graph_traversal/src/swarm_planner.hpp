@@ -19,6 +19,7 @@
 #include <crazyflie_interfaces/srv/land.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <vector>
 #include <string>
@@ -105,6 +106,10 @@ private:
     SearchManager search_mgr_;
     bool search_built_ = false;
 
+    // --- Drone Role Tracking ---
+    std::map<std::string, DroneRole> drone_roles_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr drone_role_pub_;
+
     // --- Init ---
     void initializeBMS();
 
@@ -147,6 +152,10 @@ private:
     void enforceTargetSeparation(geometry_msgs::msg::PoseArray& targets,
                                  double min_sep, double z_thresh);
     int planPriority(const std::string& id, bool is_assigned) const;
+
+    // --- ROLE HELPERS ---
+    static const char* roleToString(DroneRole r);
+    void publishRoles();
 
     // --- CONTROL ---
     void publishCommands();

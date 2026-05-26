@@ -60,24 +60,28 @@ void SwarmPlanner::handleReturnToHome() {
         // --- SEQUENTIAL LOGIC ---
         if (i < rth_index_) {
             // ALREADY LANDED -> STAY DOWN
+            drone_roles_[id] = DroneRole::LANDING;
             crazyflie_interfaces::msg::Position cmd;
             cmd.x = home_pos.x; cmd.y = home_pos.y; cmd.z = 0.05; cmd.yaw = 0.0;
             cmd_list.push_back(cmd);
         }
         else if (i > rth_index_) {
-             // WAITING -> HOVER IN PLACE
+             // WAITING -> HOVER IN PLACE (returning to base)
+             drone_roles_[id] = DroneRole::RTH;
              crazyflie_interfaces::msg::Position cmd;
              cmd.x = current_pos.x; cmd.y = current_pos.y; cmd.z = current_pos.z; cmd.yaw = 0.0;
              cmd_list.push_back(cmd);
         }
         else {
             // ACTIVE DRONE (i == rth_index_) -> GO HOME
+            drone_roles_[id] = DroneRole::RTH;
 
             // Check distance to home (2D)
             double dist = std::hypot(current_pos.x - home_pos.x, current_pos.y - home_pos.y);
 
             if (dist < 0.2) {
                 // ARRIVED AT HOME -> LAND
+                drone_roles_[id] = DroneRole::LANDING;
                 crazyflie_interfaces::msg::Position cmd;
                 cmd.x = home_pos.x;
                 cmd.y = home_pos.y;

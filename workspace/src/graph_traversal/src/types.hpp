@@ -26,6 +26,8 @@ struct AStarNode {
 
 enum class SwarmState { TAKEOFF, MISSION, RETURN_TO_HOME };
 
+enum class DroneRole { RTH, LANDING, CHAIN_COMPONENT, SEARCH };
+
 struct PoleInfo {
     double cx, cy;        // XY centre (world)
     double radius;        // approx pole half-width

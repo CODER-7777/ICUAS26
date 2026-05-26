@@ -102,6 +102,29 @@ void SwarmPlanner::runSwarmSystem() {
         rth_last_published_ = rth_now;
         rth_state_initialised_ = true;
     }
+
+    publishRoles();
+}
+
+const char* SwarmPlanner::roleToString(DroneRole r) {
+    switch (r) {
+        case DroneRole::RTH:             return "RTH";
+        case DroneRole::LANDING:         return "LANDING";
+        case DroneRole::CHAIN_COMPONENT: return "CHAIN_COMPONENT";
+        case DroneRole::SEARCH:          return "SEARCH";
+        default:                         return "UNKNOWN";
+    }
+}
+
+void SwarmPlanner::publishRoles() {
+    std::string msg;
+    for (size_t i = 0; i < droneIds_.size(); ++i) {
+        if (i > 0) msg += ",";
+        msg += droneIds_[i] + ":" + roleToString(drone_roles_[droneIds_[i]]);
+    }
+    std_msgs::msg::String out;
+    out.data = msg;
+    drone_role_pub_->publish(out);
 }
 
 void SwarmPlanner::handleTakeoff() {
@@ -315,6 +338,13 @@ void SwarmPlanner::handleMission() {
          }
     }
 
+    // --- INITIALIZE ROLES: default SEARCH for all drones ---
+    {
+        for (const auto& id : droneIds_) {
+            drone_roles_[id] = DroneRole::SEARCH;
+        }
+    }
+
     // --- GLOBAL BATTERY EMERGENCY CHECK ---
     bool emergency_rth = false;
     {
@@ -422,7 +452,8 @@ void SwarmPlanner::handleMission() {
         auto current_pos = local_poses[id].pose.position;
 
         if (drone_to_target.count(i)) {
-            // --- ACTIVE DRONE ---
+            // --- ACTIVE DRONE (Chain Component) ---
+            drone_roles_[id] = DroneRole::CHAIN_COMPONENT;
             jobs[global_idx].is_assigned = true;
             int t_idx = drone_to_target[i];
             jobs[global_idx].target_pos = local_targets.poses[t_idx].position;
@@ -505,6 +536,9 @@ void SwarmPlanner::handleMission() {
         jobs[global_idx].id = id;
         jobs[global_idx].is_assigned = true;
 
+        // Assign RTH role while returning to/from charging area
+        drone_roles_[id] = DroneRole::RTH;
+
         // 1. CHECK IF LEAVING CHARGER
         if (battery_states_[id].is_leaving_charger) {
              double elapsed = (this->now() - battery_states_[id].start_leaving_time).seconds();
@@ -570,6 +604,7 @@ void SwarmPlanner::handleMission() {
 
         // If already charging (landed), set low Z.
         if (battery_states_[id].is_charging) {
+             drone_roles_[id] = DroneRole::LANDING;
              // HOLD POSITION ON SLOT AT LOW Z
              jobs[global_idx].target_z = 0.05;
         } else {
