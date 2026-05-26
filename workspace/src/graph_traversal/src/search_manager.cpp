@@ -3,6 +3,8 @@
 void SearchManager::buildFromOctomap(const octomap::OcTree& tree) {
     poles_.clear();
     zones_.clear();
+    locked_zones_.clear();
+    tree_ = &tree;
 
     double res = tree.getResolution();
     double minX, minY, minZ, maxX, maxY, maxZ;
@@ -144,19 +146,65 @@ void SearchManager::markVisited(double x, double y, double z) {
     }
 }
 
+bool SearchManager::isOnPillar(double x, double y, double z) const {
+    for (const auto& p : poles_) {
+        if (z < p.z_bottom || z > p.z_top) continue;
+        double dx = x - p.cx;
+        double dy = y - p.cy;
+        double r = p.radius + pillar_clearance_;
+        if (dx*dx + dy*dy <= r*r) return true;
+    }
+    return false;
+}
+
+bool SearchManager::isOctomapOccupied(double x, double y, double z) const {
+    if (!tree_) return false;
+    octomap::OcTreeNode* node = const_cast<octomap::OcTree*>(tree_)
+        ->search(octomap::point3d((float)x, (float)y, (float)z));
+    if (!node) return false;
+    return const_cast<octomap::OcTree*>(tree_)->isNodeOccupied(node);
+}
+
 int SearchManager::pickNextZone(
     double drone_x, double drone_y, double drone_z,
     const std::vector<geometry_msgs::msg::Point>& anchors,
     double comm_range,
-    const std::function<bool(double, double, double, double)>& losCheck) const
+    const std::function<bool(double, double, double, double)>& losCheck,
+    const std::vector<geometry_msgs::msg::Point>& drone_obstacles) const
 {
     int best = -1;
     double best_d = 1e18;
+    const double dc2 = drone_clearance_ * drone_clearance_;
+
     for (size_t i = 0; i < zones_.size(); ++i) {
         const auto& zn = zones_[i];
         if (zn.visited) continue;
 
-        // LOS / range constraint: must be visible from at least one anchor.
+        // 1. Locked by another drone this tick.
+        if (isLocked((int)i)) continue;
+
+        // 2. Skip if zone position sits on a pillar.
+        if (isOnPillar(zn.x, zn.y, zn.z)) continue;
+
+        // 3. Skip if octomap reports the cell occupied (full 3D check).
+        if (isOctomapOccupied(zn.x, zn.y, zn.z)) continue;
+
+        // 4. Skip if any other drone (chain or already-planned idle) is
+        //    inside drone_clearance_ XY of this zone at a similar z.
+        bool blocked_by_drone = false;
+        for (const auto& o : drone_obstacles) {
+            double ox = zn.x - o.x;
+            double oy = zn.y - o.y;
+            double oz = zn.z - o.z;
+            // Same altitude band: hard XY clearance.
+            if (std::abs(oz) < 0.6 && (ox*ox + oy*oy) < dc2) {
+                blocked_by_drone = true;
+                break;
+            }
+        }
+        if (blocked_by_drone) continue;
+
+        // 5. LOS / range constraint: must be visible from at least one anchor.
         bool anchored = false;
         for (const auto& a : anchors) {
             double dx = zn.x - a.x, dy = zn.y - a.y, dz = zn.z - a.z;
@@ -165,11 +213,22 @@ int SearchManager::pickNextZone(
         }
         if (!anchored) continue;
 
+        // 6. Cost = 3D distance from drone.
         double dx = zn.x - drone_x, dy = zn.y - drone_y, dz = zn.z - drone_z;
         double d = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (d < best_d) { best_d = d; best = (int)i; }
     }
     return best;
+}
+
+int SearchManager::pickNextZone(
+    double drone_x, double drone_y, double drone_z,
+    const std::vector<geometry_msgs::msg::Point>& anchors,
+    double comm_range,
+    const std::function<bool(double, double, double, double)>& losCheck) const
+{
+    static const std::vector<geometry_msgs::msg::Point> empty;
+    return pickNextZone(drone_x, drone_y, drone_z, anchors, comm_range, losCheck, empty);
 }
 
 bool SearchManager::allVisited() const {

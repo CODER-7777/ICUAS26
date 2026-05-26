@@ -443,8 +443,40 @@ void SwarmPlanner::handleMission() {
         }
     }
 
-    // A. Process AVAILABLE DRONES
-    for (size_t i = 0; i < num_avail; ++i) {
+    // Prioritized cooperative zone selection for idle drones.
+    //   - Reset zone locks at start of tick so visited+pillar+lock state is
+    //     evaluated fresh by SearchManager.
+    //   - Collect every drone's CURRENT position as obstacles up-front
+    //     (chain drones + idle drones). Idle drones planned earlier in
+    //     this loop also append their TARGET zone position so later idle
+    //     drones treat it as occupied.
+    //   - Idle drones are processed in priority order (cf_1 first, then
+    //     cf_2, ...) so deterministic tie-breaking matches A* phase.
+    search_mgr_.resetLocks();
+
+    std::vector<geometry_msgs::msg::Point> drone_obstacles;
+    drone_obstacles.reserve(num_drones);
+    for (const auto& kv : local_poses) {
+        drone_obstacles.push_back(kv.second.pose.position);
+    }
+
+    // Sort available_drones into priority order for idle picks. Active
+    // (chain) drones get processed in the same loop but their job is
+    // determined by drone_to_target — only the idle pick logic uses the
+    // priority order to claim zones first-come-first-served.
+    std::vector<size_t> avail_order(num_avail);
+    for (size_t k = 0; k < num_avail; ++k) avail_order[k] = k;
+    std::sort(avail_order.begin(), avail_order.end(),
+        [&](size_t a, size_t b) {
+            bool a_assigned = drone_to_target.count(a) > 0;
+            bool b_assigned = drone_to_target.count(b) > 0;
+            return planPriority(available_drones[a], a_assigned)
+                 > planPriority(available_drones[b], b_assigned);
+        });
+
+    // A. Process AVAILABLE DRONES (in priority order for cooperative locking)
+    for (size_t order_k = 0; order_k < num_avail; ++order_k) {
+        size_t i = avail_order[order_k];
         // Find which global index this drone is
         std::string id = available_drones[i];
 
@@ -491,11 +523,24 @@ void SwarmPlanner::handleMission() {
                 return hasGridLineOfSight(s, e, local_grid);
             };
 
+            // Build obstacle list = every OTHER drone's current position
+            // plus zones already locked by earlier-priority idle picks.
+            // (Locked zone positions are handled inside SearchManager via
+            // locked_zones_; passing current positions catches drones in
+            // flight that haven't reached their target yet.)
+            std::vector<geometry_msgs::msg::Point> others;
+            others.reserve(drone_obstacles.size());
+            for (const auto& o : drone_obstacles) {
+                if (std::hypot(o.x - current_pos.x, o.y - current_pos.y) < 1e-3
+                    && std::abs(o.z - current_pos.z) < 1e-3) continue; // skip self
+                others.push_back(o);
+            }
+
             int zone_id = -1;
             if (search_built_ && !search_mgr_.zones_.empty()) {
                 zone_id = search_mgr_.pickNextZone(
                     current_pos.x, current_pos.y, current_pos.z,
-                    search_anchors, get_comm_range(), losCb);
+                    search_anchors, get_comm_range(), losCb, others);
             }
 
             if (zone_id >= 0) {
@@ -506,6 +551,13 @@ void SwarmPlanner::handleMission() {
                 jobs[global_idx].target_z = zn.z;
                 jobs[global_idx].has_search_yaw = true;
                 jobs[global_idx].search_yaw = zn.yaw;
+                // Lock this zone so subsequent idle drones in this tick
+                // cannot claim the same target.
+                search_mgr_.lockZone(zone_id);
+                // Add the target zone position to drone_obstacles so it
+                // also blocks proximity-based picks (drone_clearance_).
+                geometry_msgs::msg::Point zp; zp.x = zn.x; zp.y = zn.y; zp.z = zn.z;
+                drone_obstacles.push_back(zp);
             } else {
                 // Fallback shadow logic (no reachable unvisited zone). Old
                 // version used `magic % 4` which collides (e.g. cf_1 and
