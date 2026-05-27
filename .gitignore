@@ -3,3 +3,5 @@ workspace/install/
 workspace/log/
 workspace/.cache/
 **.pyc
+.idea/
+.claude/

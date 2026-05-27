@@ -29,6 +29,15 @@ double get_comm_range(){
     }
 }
 
+bool get_visualize(){
+    const char* env_p = std::getenv("VISUALIZE");
+    if (env_p) {
+        return std::string(env_p) == "1";
+    } else {
+        return false;
+    }
+}
+
 std::string config_path = "/root/ros2_ws/src/icuas26_competition/config/";
 YAML::Node config = YAML::LoadFile(config_path+get_charging_file());
 

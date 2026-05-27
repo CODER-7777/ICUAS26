@@ -26,4 +26,6 @@ windows:
       layout: tiled
       panes:
         - waitForCfsGazebo;sleep 16;ros2 run debug_logger debug_logger_node
-        - ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+        - waitForCfsGazebo;sleep 16;ros2 launch swarm_viz foxglove.launch.py
+
+

@@ -5,6 +5,7 @@
 int get_num_robots(); 
 std::string get_charging_file();
 double get_comm_range();
+bool get_visualize();
 
 std::vector<double> charging_area_upper_left();
 std::vector<double> charging_area_down_right();

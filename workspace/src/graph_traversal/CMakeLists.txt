@@ -15,11 +15,14 @@ find_package(rclcpp REQUIRED)
 find_package(octomap REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(octomap_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(crazyflie_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+
+include_directories(include)
 
 add_executable(bfs src/bfs.cpp src/utils.cpp)
 add_executable(occupancy src/occupancy_grid.cpp)
@@ -72,6 +75,13 @@ install(TARGETS
   move
   prediction
   DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY include/
+  DESTINATION include
+)
+
+ament_export_include_directories(include)
+ament_export_dependencies(nav_msgs)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

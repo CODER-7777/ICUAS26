@@ -25,7 +25,17 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="c67fae0d-0843-4d4f-9dcd-5fd2fe31a8a0" name="Changes" comment="" />
+    <list default="true" id="c67fae0d-0843-4d4f-9dcd-5fd2fe31a8a0" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/debug_tools/src/debug_logger_node.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/debug_tools/src/debug_logger_node.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/package.xml" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/package.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_grid.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_grid.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_init.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_init.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_mission.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/graph_traversal/src/swarm_planner_mission.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/swarm_viz/src/viz_node.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/swarm_viz/src/viz_node.cpp" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -42,9 +52,13 @@
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
   </component>
   <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/src/aruco_mission_cpp/src/aruco_mission_node.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/src/graph_traversal/CMakeLists.txt" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/src/graph_traversal/include/utils.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/src/graph_traversal/package.xml" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/src/graph_traversal/src/bfs.cpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/src/graph_traversal/src/move.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/src/graph_traversal/src/prediction.cpp" root0="FORCE_HIGHLIGHTING" />
   </component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="baKgTO7S" />
@@ -81,7 +95,7 @@
     "cidr.known.project.marker": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "fix/repulsion",
+    "git-widget-placeholder": "master",
     "junie.onboarding.icon.badge.shown": "true",
     "last_opened_file_path": "/root/icuas26_competition/workspace",
     "node.js.detected.package.eslint": "true",
@@ -94,13 +108,6 @@
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
-  <component name="RunManager">
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
-  </component>
   <component name="TaskManager">
     <task active="true" id="Default" summary="Default task">
       <changelist id="c67fae0d-0843-4d4f-9dcd-5fd2fe31a8a0" name="Changes" comment="" />

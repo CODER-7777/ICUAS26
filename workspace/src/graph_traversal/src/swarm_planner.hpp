@@ -13,6 +13,7 @@
 #include <octomap/octomap.h>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <crazyflie_interfaces/msg/position.hpp>
 #include <crazyflie_interfaces/srv/takeoff.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
@@ -75,6 +76,8 @@ private:
     std::map<std::string, std::vector<crazyflie_interfaces::msg::Position>> active_commands_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr rth_state_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_drone_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr base_anchor_pub_;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_slice_pub_;
     bool rth_state_initialised_ = false;
     bool rth_last_published_ = false;
     std::map<std::string, geometry_msgs::msg::Point> initial_poses_;
