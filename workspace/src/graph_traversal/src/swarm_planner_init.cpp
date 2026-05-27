@@ -106,10 +106,10 @@ SwarmPlanner::SwarmPlanner() : Node("Swarm_planner") {
             // node started after the planner still picks up the latest values.
             base_anchor_pub_     = this->create_publisher<geometry_msgs::msg::PointStamped>("/swarm_viz/base_anchor", qos);
             occupancy_slice_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/swarm_viz/occupancy_slice", qos);
-
-            // Drone role publisher: comma-separated "id:ROLE" pairs, updated every planning tick.
-            drone_role_pub_ = this->create_publisher<std_msgs::msg::String>("/drone_roles", 10);
         }
+
+        // Drone role publisher: comma-separated "id:ROLE" pairs, updated every planning tick.
+        drone_role_pub_ = this->create_publisher<std_msgs::msg::String>("/drone_roles", 10);
     }
 
 
