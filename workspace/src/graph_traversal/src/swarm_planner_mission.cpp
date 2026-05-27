@@ -122,6 +122,7 @@ void SwarmPlanner::publishRoles() {
         if (i > 0) msg += ",";
         msg += droneIds_[i] + ":" + roleToString(drone_roles_[droneIds_[i]]);
     }
+    if (!drone_role_pub_) return;
     std_msgs::msg::String out;
     out.data = msg;
     drone_role_pub_->publish(out);

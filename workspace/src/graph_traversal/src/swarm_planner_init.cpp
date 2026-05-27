@@ -99,16 +99,18 @@ SwarmPlanner::SwarmPlanner() : Node("Swarm_planner") {
         // Mission completion publisher: true when all drones have returned to base.
         mission_drone_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission_done", qos);
 
-        // swarm_viz consumes the same base anchor + inflated occupancy slice
-        // the planner uses, so the comm-graph it draws is geometrically
-        // identical to what the planner reasons about. Latched so a viz
-        // node started after the planner still picks up the latest values.
-        base_anchor_pub_     = this->create_publisher<geometry_msgs::msg::PointStamped>("/swarm_viz/base_anchor", qos);
-        occupancy_slice_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/swarm_viz/occupancy_slice", qos);
-    }
+        if (get_visualize()) {
+            // swarm_viz consumes the same base anchor + inflated occupancy slice
+            // the planner uses, so the comm-graph it draws is geometrically
+            // identical to what the planner reasons about. Latched so a viz
+            // node started after the planner still picks up the latest values.
+            base_anchor_pub_     = this->create_publisher<geometry_msgs::msg::PointStamped>("/swarm_viz/base_anchor", qos);
+            occupancy_slice_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/swarm_viz/occupancy_slice", qos);
 
-    // Drone role publisher: comma-separated "id:ROLE" pairs, updated every planning tick.
-    drone_role_pub_ = this->create_publisher<std_msgs::msg::String>("/drone_roles", 10);
+            // Drone role publisher: comma-separated "id:ROLE" pairs, updated every planning tick.
+            drone_role_pub_ = this->create_publisher<std_msgs::msg::String>("/drone_roles", 10);
+        }
+    }
 
 
     // 4. Timers
