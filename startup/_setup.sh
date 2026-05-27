@@ -6,6 +6,6 @@ export SPAWN_POSE_DOC=positions_${KEYWORD}.txt
 export GZ_VERSION=garden
 export BINVOX_STL_LOCATION=""
 export COMM_RANGE=3
-export AGV_VEL=0.5
+export AGV_VEL=0.3
 export CHARGING_FILE=charging_$KEYWORD.yaml
 export AGV_PATH=AGV_path_$KEYWORD.yaml
