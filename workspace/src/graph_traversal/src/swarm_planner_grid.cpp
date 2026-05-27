@@ -18,6 +18,13 @@ void SwarmPlanner::fetchOctomapOnce() {
                 map_ready_ = true;
                 RCLCPP_INFO(this->get_logger(), "Map Received. Grid Resolution: %.2f", cached_grid_->info.resolution);
 
+                if (occupancy_slice_pub_) {
+                    auto slice = *cached_grid_;
+                    slice.header.frame_id = "world";
+                    slice.header.stamp = this->now();
+                    occupancy_slice_pub_->publish(slice);
+                }
+
                 // Build search zones from poles detected in the octree.
                 if (tree_ && !search_built_) {
                     // Record ground height (pole z_bottom = octomap minZ = drone start height)

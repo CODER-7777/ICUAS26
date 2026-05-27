@@ -435,6 +435,16 @@ void SwarmPlanner::handleMission() {
     base.x = 0.0; base.y = 0.0; base.z = z_mission;
     anchors.push_back(base);
 
+    // Mirror the planner's base anchor to swarm_viz. Republished every tick
+    // because z tracks z_mission, which AGV-loop height boosts can change.
+    if (base_anchor_pub_) {
+        geometry_msgs::msg::PointStamped bs;
+        bs.header.frame_id = "world";
+        bs.header.stamp = this->now();
+        bs.point = base;
+        base_anchor_pub_->publish(bs);
+    }
+
     for (const auto& kv : drone_to_target) {
         const std::string& aid = available_drones[kv.first];
         auto pit = local_poses.find(aid);

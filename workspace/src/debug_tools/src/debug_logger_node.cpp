@@ -242,7 +242,7 @@ private:
         // Exact maths from task.md
         double points_conn = 30.0 * (total_connected_time_ / t_mission);
         
-        double t_mission_max = 1764.5; // Used Eval C max time as reference
+        double t_mission_max = 164.5; // Used Eval C max time as reference
         double points_time = 30.0 * (t_mission / t_mission_max);
         
         double err_avg = 0.0;

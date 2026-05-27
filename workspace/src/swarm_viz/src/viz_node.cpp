@@ -14,6 +14,7 @@
 #include "graph_traversal/los.hpp"
 
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -86,6 +87,15 @@ public:
                 base_anchor_ = msg->point;
             });
 
+        // AGV is a comm anchor too — same topic the planner consumes for
+        // loop detection. Plain geometry_msgs/Point (no header), not latched.
+        agv_sub_ = this->create_subscription<geometry_msgs::msg::Point>(
+            "/AGV/pose", 10,
+            [this](geometry_msgs::msg::Point::SharedPtr msg) {
+                std::lock_guard<std::mutex> lk(mu_);
+                agv_anchor_ = *msg;
+            });
+
         // Per-drone pose subscriptions and Path publishers.
         // Pose topics fire at ~100 Hz per drone. We still want the latest
         // pose (for the sphere marker), but pushing onto the trail deque
@@ -140,24 +150,27 @@ private:
         std::map<std::string, geometry_msgs::msg::PoseStamped> poses_snap;
         std::map<std::string, std::deque<geometry_msgs::msg::Point>> trails_snap;
         std::optional<geometry_msgs::msg::Point> base_snap;
+        std::optional<geometry_msgs::msg::Point> agv_snap;
         nav_msgs::msg::OccupancyGrid::SharedPtr grid_snap;
         {
             std::lock_guard<std::mutex> lk(mu_);
             poses_snap = poses_;
             trails_snap = trails_;
             base_snap = base_anchor_;
+            agv_snap = agv_anchor_;
             grid_snap = grid_;  // shared_ptr bump
         }
 
-        publishDrones(now, poses_snap, base_snap);
+        publishDrones(now, poses_snap, base_snap, agv_snap);
         publishTrails(now, trails_snap);
-        publishCommGraph(now, poses_snap, base_snap, grid_snap);
+        publishCommGraph(now, poses_snap, base_snap, agv_snap, grid_snap);
         if (show_range_) publishCommRangeSpheres(now, poses_snap);
     }
 
     void publishDrones(const rclcpp::Time& stamp,
                        const std::map<std::string, geometry_msgs::msg::PoseStamped>& poses,
-                       const std::optional<geometry_msgs::msg::Point>& base) {
+                       const std::optional<geometry_msgs::msg::Point>& base,
+                       const std::optional<geometry_msgs::msg::Point>& agv) {
         visualization_msgs::msg::MarkerArray arr;
         int id = 0;
         for (const auto& did : drone_ids_) {
@@ -180,6 +193,14 @@ private:
                 swarm_viz::makeColor(0.9f, 0.5f, 0.1f, 0.9f), stamp));
             arr.markers.push_back(swarm_viz::makeTextLabel(
                 frame_id_, "drone_labels", id++, *base, "BASE",
+                0.3, swarm_viz::makeColor(1.0f, 1.0f, 1.0f, 1.0f), stamp));
+        }
+        if (agv) {
+            arr.markers.push_back(swarm_viz::makeSphere(
+                frame_id_, "drones", id++, *agv, drone_diameter_ * 1.4,
+                swarm_viz::makeColor(0.8f, 0.2f, 0.8f, 0.9f), stamp));
+            arr.markers.push_back(swarm_viz::makeTextLabel(
+                frame_id_, "drone_labels", id++, *agv, "AGV",
                 0.3, swarm_viz::makeColor(1.0f, 1.0f, 1.0f, 1.0f), stamp));
         }
         drones_pub_->publish(arr);
@@ -211,17 +232,19 @@ private:
     void publishCommGraph(const rclcpp::Time& stamp,
                           const std::map<std::string, geometry_msgs::msg::PoseStamped>& poses,
                           const std::optional<geometry_msgs::msg::Point>& base,
+                          const std::optional<geometry_msgs::msg::Point>& agv,
                           const nav_msgs::msg::OccupancyGrid::SharedPtr& grid) {
         // Points only — the old code allocated a std::string label per
         // anchor every tick that was never read.
         std::vector<geometry_msgs::msg::Point> anchors;
-        anchors.reserve(drone_ids_.size() + 1);
+        anchors.reserve(drone_ids_.size() + 2);
         for (const auto& did : drone_ids_) {
             auto it = poses.find(did);
             if (it == poses.end()) continue;
             anchors.push_back(it->second.pose.position);
         }
         if (base) anchors.push_back(*base);
+        if (agv)  anchors.push_back(*agv);
         if (anchors.size() < 2) return;  // nothing to draw
 
         const auto green  = swarm_viz::makeColor(0.1f, 0.9f, 0.1f, 0.95f);
@@ -297,11 +320,13 @@ private:
     std::map<std::string, rclcpp::Time> last_trail_time_;
     const double trail_sample_period_ = 0.1;  // 10 Hz trail samples
     std::optional<geometry_msgs::msg::Point> base_anchor_;
+    std::optional<geometry_msgs::msg::Point> agv_anchor_;
     nav_msgs::msg::OccupancyGrid::SharedPtr grid_;
 
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> pose_subs_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr base_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr agv_sub_;
 
     std::map<std::string, rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr> trail_pubs_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr drones_pub_;
