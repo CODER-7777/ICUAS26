@@ -15,13 +15,13 @@
 class SearchManager {
 public:
     // Tunables (could be exposed as ROS params later).
-    double standoff_ = 1.5;       // distance from pole surface to zone centre
+    double standoff_ = 1.2;       // distance from pole surface to zone centre
     double visit_radius_ = 0.5;   // drone must be this close to mark visited
     double zone_height_low_ = 0.25;  // 25% of pole height
     double zone_height_high_ = 0.75; // 75% of pole height
     double min_pole_cells_ = 4;   // floor area threshold to count as pole
     double max_pole_extent_ = 1.5; // m; reject components wider than this (walls)
-    double dwell_time_sec_ = 0.5; // seconds to dwell at a zone before marking visited
+    double dwell_time_sec_ = 1.0; // seconds to dwell at a zone before marking visited
 
     // Cooperative planning tunables.
     double drone_clearance_ = 0.6;  // min XY distance between zone and any drone obstacle
