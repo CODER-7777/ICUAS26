@@ -16,7 +16,7 @@
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <crazyflie_interfaces/msg/position.hpp>
 #include <crazyflie_interfaces/srv/takeoff.hpp>
-#include <sensor_msgs/msg/battery_state.hpp>
+#include <crazyflie_interfaces/msg/status.hpp>
 #include <crazyflie_interfaces/srv/land.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -92,7 +92,7 @@ private:
 
     // --- BMS Members ---
     std::map<std::string, DroneBatteryState> battery_states_;
-    std::vector<rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr> battery_subs_;
+    std::vector<rclcpp::Subscription<crazyflie_interfaces::msg::Status>::SharedPtr> battery_subs_;
     std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Land>::SharedPtr> land_clients_;
     std::map<std::string, rclcpp::Client<crazyflie_interfaces::srv::Takeoff>::SharedPtr> takeoff_clients_;
 

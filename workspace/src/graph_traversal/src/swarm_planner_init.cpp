@@ -178,11 +178,11 @@ void SwarmPlanner::initializeBMS() {
         battery_states_[id] = DroneBatteryState();
 
         // Battery Sub
-        battery_subs_.push_back(this->create_subscription<sensor_msgs::msg::BatteryState>(
-            "/" + id + "/battery_status", 10,
-            [this, id](const sensor_msgs::msg::BatteryState::SharedPtr msg) {
+        battery_subs_.push_back(this->create_subscription<crazyflie_interfaces::msg::Status>(
+            "/" + id + "/status", 10,
+            [this, id](const crazyflie_interfaces::msg::Status::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(data_mutex_);
-                this->battery_states_[id].percentage = msg->percentage;
+                this->battery_states_[id].percentage = std::max(0.0f, std::min(100.0f, (msg->vbat - 3.1f) / (4.0f - 3.1f) * 100.0f));
             }, sub_opt));
 
         // Land Client

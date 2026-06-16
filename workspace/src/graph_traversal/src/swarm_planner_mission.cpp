@@ -673,10 +673,14 @@ void SwarmPlanner::handleMission() {
              drone_roles_[id] = DroneRole::LANDING;
              // HOLD POSITION ON SLOT AT LOW Z
              jobs[global_idx].target_z = 0.05;
+             jobs[global_idx].has_search_yaw = true;
+             jobs[global_idx].search_yaw = 0.0;
         } else {
              // Going to charge (Transit) -> APPROACH HEIGHT 0.5
              // Safe but distinct from ground
              jobs[global_idx].target_z = 0.5;
+             jobs[global_idx].has_search_yaw = true;
+             jobs[global_idx].search_yaw = 0.0;
         }
     }
 
@@ -738,7 +742,6 @@ void SwarmPlanner::handleMission() {
             nav_msgs::msg::OccupancyGrid plan_grid = local_grid;
             for (size_t j = 0; j < num_drones; ++j) {
                 if (j == i) continue;
-                if (std::abs(footprint_z[j] - job.target_z) > z_thresh) continue;
                 markPathReservation(plan_grid, footprints[j], reservation_steps);
             }
 
