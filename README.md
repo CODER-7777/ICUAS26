@@ -3,8 +3,7 @@
 **ICUAS 2026** Swarm System is designed to coordinate a fleet of 5 Crazyflie nano-drones in an urban cityscape. The drones cooperatively navigate to locate ArUco markers on obstacle pillars while maintaining a communication relay chain to a moving ground vehicle (AGV). It integrates two-tier path planning, dynamic communication relays, and an event-driven battery management system.
 
 <p align="center">
-  <img src="https://via.placeholder.com/400x225?text=Swarm+Demo+1" width="400" height="225"/>
-  <img src="https://via.placeholder.com/400x225?text=Swarm+Demo+2" width="400" height="225"/>
+  <img src="https://via.placeholder.com/800x450?text=Insert+Demo+GIF+Here" width="800" height="450"/>
 </p>
 
 To run this project in minutes, check [Quick Start](#1-quick-start). Check other sections for more detailed information.
@@ -41,15 +40,8 @@ ros2 launch icuas26_competition main.launch.py
 All planning algorithms along with other key modules are implemented in this repository:
 
 - **Swarm Architecture**: Developed an **event-driven Finite State Machine (FSM)** for priority-based battery management and scheduling. The C++ ROS 2 node orchestrates 5 drones through `TAKEOFF` → `MISSION` → `RETURN-TO-HOME` phases, with real-time role assignment.
-<p align="center">
-  <img src="https://via.placeholder.com/800x225?text=FSM+Architecture" width="800" height="225"/>
-</p>
 
 - **Two-Tier Path Planning**: Designed a two-tier path planning framework integrating **BFS** with **Bresenham line-of-sight optimization** for global route generation, and **A*** for local navigation to track a moving target with uncertain position estimates. Each drone plans in priority order and inflates its smoothed path into a reservation grid, guaranteeing collision-free trajectories.
-<p align="center">
-  <img src="https://via.placeholder.com/400x225?text=Global+Planning" width="400" height="225"/>
-  <img src="https://via.placeholder.com/400x225?text=Local+Planning" width="400" height="225"/>
-</p>
 
 - **Communication-Constrained Relay Chain**: Solves a connectivity-constrained multi-robot problem where drones must maintain a line-of-sight (LOS) relay chain between a base station and a moving AGV. Utilized **bipartite matching** for drone-to-waypoint assignment, achieving an optimized **O(log D · VE)** execution time to minimize the bottleneck edge length across the fleet.
 
