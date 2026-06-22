@@ -19,21 +19,39 @@ Please kindly star :star: this project if it helps you. We take great efforts to
 ## 1. Quick Start
 This project has been tested on Ubuntu 22.04 (ROS Humble).
 
-Firstly, you should install the following required libraries:
-Docker Engine & Docker Compose, NVIDIA GPU with Container Toolkit (recommended for Gazebo).
+Firstly, you should ensure you have **Docker** and the **NVIDIA Container Toolkit** installed.
 
-Then simply clone and compile our package:
+Then, clone the repository and build the Docker image:
 ```bash
 git clone https://github.com/CODER-7777/ICUAS26.git
 cd ICUAS26
-docker build -t icuas26_competition .
+export DOCKER_BUILDKIT=1
+docker build --ssh default -t crazysim_icuas_img .
 ```
 
-After compilation you can start a simulation:
+Run the container for the first time:
 ```bash
-# Execute the primary launch file / tmuxinator session
-ros2 launch icuas26_competition main.launch.py
+./first_run.sh
 ```
+*(This will create the docker container `crazysim_icuas_cont` and place you inside it).*
+
+For subsequent use of the container, you can start and attach to it using:
+```bash
+docker start -i crazysim_icuas_cont
+```
+
+### Running the Simulation
+Once inside the container, navigate to the startup directory (you can use the built-in alias):
+```bash
+cd_icuas26_competition
+cd startup
+```
+
+Start the simulation (Tmuxinator will launch the Gazebo world and all Swarm Nodes):
+```bash
+./start.sh
+```
+*(To run the full competition city instead of the empty world, edit `_setup.sh` and set `export KEYWORD=icuas26_1` before running `start.sh`)*.
 
 ## 2. Algorithms and Key Modules
 
