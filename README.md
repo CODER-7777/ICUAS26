@@ -9,8 +9,9 @@ Please kindly star :star: this project if it helps you. We take great efforts to
 ## Table of Contents
 * [Quick Start](#1-quick-start)
 * [Algorithms and Key Modules](#2-algorithms-and-key-modules)
-* [Use in Your Application](#3-use-in-your-application)
-* [Parameters](#4-parameters)
+* [Workspace Overview](#3-workspace-overview)
+* [Use in Your Application](#4-use-in-your-application)
+* [Parameters](#5-parameters)
 
 ## 1. Quick Start
 This project has been tested on Ubuntu 22.04 (ROS Humble).
@@ -65,14 +66,35 @@ All planning algorithms along with other key modules are implemented in this rep
 
 The full pipeline is validated in simulation (Gazebo Garden), achieving **Global Rank 6** and making us the **only Indian team** to qualify for the final round in Greece. We achieved detection of **7/8 ArUco markers** and sustained over **70% communication connectivity**.
 
-## 3. Use in Your Application
+## 3. Workspace Overview
+
+This environment consists of two main ROS 2 workspaces that separate custom mission logic from the core platform and competition dependencies.
+
+### Custom Mission Workspace (`/root/workspace/src/`)
+This workspace contains the custom-developed packages for the multi-drone swarm mission, focusing on perception, planning, and visualization.
+
+* **`aruco_mission_cpp`**: A C++ node for ArUco marker detection, specifically designed for multi-drone scenarios (converted from a Python implementation for better performance). Depends on `cv_bridge`, `image_transport`, `icuas25_msgs`, `tf2`.
+* **`graph_traversal`**: The core planning and navigation package. It handles multi-agent pathfinding, graph-based planning, and integrates heavily with OctoMap for 3D environment representation and obstacle avoidance.
+* **`swarm_viz`**: A debugging and visualization package for the multi-drone swarm planner. It renders drone markers, flight trails, and the communication/Line-of-Sight (LOS) graph. Designed to work well with Foxglove Studio.
+* **`debug_tools/debug_logger`**: A centralized mission logging node. It subscribes to all critical swarm topics (states, commands, map updates) and produces timestamped logs for post-mission analysis and debugging.
+
+### Platform & Competition Workspace (`/root/ros2_ws/src/`)
+This workspace contains the foundational drivers, simulation environments, and external dependencies required to run the ICUAS'26 competition simulation.
+
+* **`icuas26_competition`**: The central competition package containing the main launch files (`system_launch.py`), Gazebo Garden environments, configuration files, setup scripts, and Dockerfile.
+* **`crazyswarm2`**: The official ROS 2 driver and simulation package for the Crazyflie micro-UAVs. Handles low-level communication, flight control, and Gazebo integration.
+* **`icuas25_msgs`**: Custom ROS 2 message definitions utilized by the competition infrastructure.
+* **`ros2_aruco`**: A ROS 2 wrapper for OpenCV-based ArUco marker tracking.
+* **`motion_capture_tracking`**: Interfaces and nodes for integrating external motion capture systems (like Vicon or OptiTrack).
+
+## 4. Use in Your Application
 If you want to use the ICUAS swarm components in your own application, please explore the `workspace/src/graph_traversal/` directory for the core C++ planning logic (A*, BFS, SearchManager). 
 
 For the advanced control prototypes, check the `workspace/` directory for:
 - **RL-Based Pursuit:** A PPO-based reinforcement learning node (`deploy_node.py`) using Stable Baselines3 for single-drone obstacle-avoidant tracking.
 - **Distributed MPC:** A Model Predictive Control node (`distributed_mpc_node.py`) using CVXOPT for QP-based obstacle-avoidant trajectory optimization.
 
-## 4. Parameters
+## 5. Parameters
 The ROS implementation exposes several parameters inside `workspace/config.yaml`:
 
 |Parameter|Definition|Default|
