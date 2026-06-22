@@ -66,8 +66,8 @@ Features a hot-swap charging strategy with concurrent slot management (max 2 dro
 ### Installation & Execution
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/autonomous-drone-swarm.git
-   cd autonomous-drone-swarm
+   git clone https://github.com/CODER-7777/ICUAS26.git
+   cd ICUAS26
    ```
 2. **Build the Docker container:**
    ```bash
