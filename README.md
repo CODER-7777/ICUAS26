@@ -1,109 +1,80 @@
-# Autonomous Multi-UAV Swarm System for Urban Search & Rescue
+# ICUAS 2026: Autonomous Multi-UAV Swarm System
 
-[![ROS 2](https://img.shields.io/badge/ROS_2-Humble-22314E?logo=ros)](https://docs.ros.org/en/humble/)
-[![C++](https://img.shields.io/badge/C++-17-00599C?logo=c%2B%2B)](https://cplusplus.com/)
-[![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python)](https://www.python.org/)
-[![Gazebo](https://img.shields.io/badge/Gazebo-Garden-FF7B00?logo=gazebo)](https://gazebosim.org/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://www.docker.com/)
+**ICUAS 2026** Swarm System is designed to coordinate a fleet of 5 Crazyflie nano-drones in an urban cityscape. The drones cooperatively navigate to locate ArUco markers on obstacle pillars while maintaining a communication relay chain to a moving ground vehicle (AGV). It integrates two-tier path planning, dynamic communication relays, and an event-driven battery management system.
 
-> **Developed for the ICUAS 2026 International Competition**
+<p align="center">
+  <img src="https://via.placeholder.com/400x225?text=Swarm+Demo+1" width="400" height="225"/>
+  <img src="https://via.placeholder.com/400x225?text=Swarm+Demo+2" width="400" height="225"/>
+</p>
 
-This repository contains the complete software stack for an autonomous multi-drone swarm system. A fleet of 5 Crazyflie nano-drones cooperatively navigates an urban cityscape to locate ArUco markers on obstacle pillars while maintaining a communication relay chain to a moving ground vehicle (AGV). 
+To run this project in minutes, check [Quick Start](#1-quick-start). Check other sections for more detailed information.
 
-The system operates entirely in **ROS 2 (Humble)** with **Gazebo Garden** simulation, features a custom C++ swarm planner, and is fully Docker-containerized for reproducibility.
+Please kindly star :star: this project if it helps you. We take great efforts to develop and maintain it :grin::grin:.
 
-![Swarm Simulation Demo](https://via.placeholder.com/800x400?text=Insert+GIF/Screenshot+of+Swarm+Here)
+## Table of Contents
+* [Quick Start](#1-quick-start)
+* [Algorithms and Key Modules](#2-algorithms-and-key-modules)
+* [Use in Your Application](#3-use-in-your-application)
+* [Parameters](#4-parameters)
 
----
+## 1. Quick Start
+This project has been tested on Ubuntu 22.04 (ROS Humble).
 
-## Competition Results
+Firstly, you should install the following required libraries:
+Docker Engine & Docker Compose, NVIDIA GPU with Container Toolkit (recommended for Gazebo).
 
-- **Global Rank 6:** Emerged as the **only Indian team** to qualify for the final round in Greece out of a highly competitive international pool.
-- **Mission Success:** Achieved detection of **7/8 ArUco markers** in a complex 100m × 100m × 100m 3D map using a 5-drone swarm system.
-- **Performance Metrics:** Sustained over **70% communication connectivity** with a moving target with uncertain position estimates, and improved flight time by **40%** through optimized battery scheduling.
-
----
-
-## Key Features
-
-### Event-Driven Swarm Architecture
-Developed an **event-driven Finite State Machine (FSM)** for priority-based battery management and scheduling. The C++ ROS 2 node orchestrates 5 drones through `TAKEOFF` → `MISSION` → `RETURN-TO-HOME` phases, with real-time role assignment (Chain Component, Search, RTH, Landing).
-
-### Two-Tier Path Planning Framework
-Designed a two-tier path planning framework integrating **BFS** with **Bresenham line-of-sight optimization** for global route generation, and **A*** for local navigation to track a moving target with uncertain position estimates. Each drone plans in priority order and inflates its smoothed path into a reservation grid, guaranteeing collision-free trajectories.
-
-### Communication-Constrained Relay Chain
-Solves a connectivity-constrained multi-robot problem where drones must maintain a line-of-sight (LOS) relay chain between a base station and a moving AGV. Utilized **bipartite matching** for drone-to-waypoint assignment, achieving an optimized **O(log D · VE)** execution time to minimize the bottleneck edge length across the fleet.
-
-### Autonomous ArUco Search
-A `SearchManager` module extracts vertical obstacle pillars from OctoMap data, generates 8 viewpoint zones per pillar (4 cardinal directions × 2 heights), and assigns idle drones to unvisited zones using cooperative selection with drone-clearance and pillar-clearance constraints.
-
-### Battery Management System (BMS)
-Features a hot-swap charging strategy with concurrent slot management (max 2 drones charging simultaneously). Includes smart recall logic to only recall a charging drone if it has gained ≥10% charge or all other drones are unavailable, plus an emergency RTH triggered below 25% battery.
-
-### Advanced Control Prototypes
-- **RL-Based Pursuit:** A PPO-based reinforcement learning node using Stable Baselines3 for single-drone obstacle-avoidant tracking, utilizing 12-ray LIDAR-like raycasting.
-- **Distributed MPC:** A Model Predictive Control node using CVXOPT for QP-based obstacle-avoidant trajectory optimization with RRT* initial positioning.
-
----
-
-## Technology Stack
-
-- **Frameworks:** ROS 2 Humble, Gazebo Garden
-- **Languages:** C++17, Python 3
-- **Algorithms:** A*, BFS, RRT*, Hungarian Matching, Raycasting
-- **Libraries:** OctoMap, Stable Baselines3, CVXOPT
-- **Infrastructure:** Docker, tmuxinator, CrazySim
-
----
-
-## Getting Started
-
-### Prerequisites
-- Docker Engine & Docker Compose
-- NVIDIA GPU with Container Toolkit (recommended for Gazebo)
-
-### Installation & Execution
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/CODER-7777/ICUAS26.git
-   cd ICUAS26
-   ```
-2. **Build the Docker container:**
-   ```bash
-   docker build -t icuas26_competition .
-   ```
-3. **Run the simulation stack:**
-   *(Instructions on how to launch the primary launch file / tmuxinator session)*
-   ```bash
-   # Example
-   ros2 launch icuas26_competition main.launch.py
-   ```
-
----
-
-## Repository Structure
-
-```text
-icuas26_competition/
-├── Dockerfile                  # Containerization setup
-├── config.yaml                 # Core configuration parameters
-├── workspace/                  
-│   └── src/                    # ROS 2 packages
-│       ├── aruco_mission_cpp/  # ArUco detection & pose estimation
-│       ├── graph_traversal/    # Swarm planner, A*, BMS, & Search logic
-│       ├── debug_tools/        # Telemetry & debugging nodes
-│       └── swarm_viz/          # Foxglove & RViz visualizers
-├── scripts/                    
-│   ├── AGV.py                  # Ground vehicle waypoint interpolation
-│   └── charging.py             # Gazebo battery state & docking logic
-├── worlds/                     # Gazebo Garden city environments
-└── ...
+Then simply clone and compile our package:
+```bash
+git clone https://github.com/CODER-7777/ICUAS26.git
+cd ICUAS26
+docker build -t icuas26_competition .
 ```
 
----
+After compilation you can start a simulation:
+```bash
+# Execute the primary launch file / tmuxinator session
+ros2 launch icuas26_competition main.launch.py
+```
 
-## Author
+## 2. Algorithms and Key Modules
 
-**Mansoju Vivekananda**  
-*(Add links to your LinkedIn, Portfolio, or email here)*
+All planning algorithms along with other key modules are implemented in this repository:
+
+- **Swarm Architecture**: Developed an **event-driven Finite State Machine (FSM)** for priority-based battery management and scheduling. The C++ ROS 2 node orchestrates 5 drones through `TAKEOFF` → `MISSION` → `RETURN-TO-HOME` phases, with real-time role assignment.
+<p align="center">
+  <img src="https://via.placeholder.com/800x225?text=FSM+Architecture" width="800" height="225"/>
+</p>
+
+- **Two-Tier Path Planning**: Designed a two-tier path planning framework integrating **BFS** with **Bresenham line-of-sight optimization** for global route generation, and **A*** for local navigation to track a moving target with uncertain position estimates. Each drone plans in priority order and inflates its smoothed path into a reservation grid, guaranteeing collision-free trajectories.
+<p align="center">
+  <img src="https://via.placeholder.com/400x225?text=Global+Planning" width="400" height="225"/>
+  <img src="https://via.placeholder.com/400x225?text=Local+Planning" width="400" height="225"/>
+</p>
+
+- **Communication-Constrained Relay Chain**: Solves a connectivity-constrained multi-robot problem where drones must maintain a line-of-sight (LOS) relay chain between a base station and a moving AGV. Utilized **bipartite matching** for drone-to-waypoint assignment, achieving an optimized **O(log D · VE)** execution time to minimize the bottleneck edge length across the fleet.
+
+- **Autonomous ArUco Search**: A `SearchManager` module extracts vertical obstacle pillars from OctoMap data, generates 8 viewpoint zones per pillar (4 cardinal directions × 2 heights), and assigns idle drones to unvisited zones using cooperative selection with drone-clearance and pillar-clearance constraints.
+
+- **Battery Management System (BMS)**: Features a hot-swap charging strategy with concurrent slot management (max 2 drones charging simultaneously). Includes smart recall logic to only recall a charging drone if it has gained ≥10% charge or all other drones are unavailable, plus an emergency RTH triggered below 25% battery.
+
+The full pipeline is validated in simulation (Gazebo Garden), achieving **Global Rank 6** and making us the **only Indian team** to qualify for the final round in Greece. We achieved detection of **7/8 ArUco markers** and sustained over **70% communication connectivity**.
+
+## 3. Use in Your Application
+If you want to use the ICUAS swarm components in your own application, please explore the `workspace/src/graph_traversal/` directory for the core C++ planning logic (A*, BFS, SearchManager). 
+
+For the advanced control prototypes, check the `workspace/` directory for:
+- **RL-Based Pursuit:** A PPO-based reinforcement learning node (`deploy_node.py`) using Stable Baselines3 for single-drone obstacle-avoidant tracking.
+- **Distributed MPC:** A Model Predictive Control node (`distributed_mpc_node.py`) using CVXOPT for QP-based obstacle-avoidant trajectory optimization.
+
+## 4. Parameters
+The ROS implementation exposes several parameters inside `workspace/config.yaml`:
+
+|Parameter|Definition|Default|
+|---|---|---|
+|`resolution`|Resolution of the simulation environment grid.|0.1 m|
+|`max_steps`|Maximum steps for the simulation environment.|1000|
+|`max_accel`|Maximum acceleration for the drones.|1.0 m/s^2|
+|`n_rays`|Number of LIDAR-like rays used for observation in RL tracking.|12|
+|`max_range`|Maximum range of the simulated sensors.|5.0 m|
+|`max_comm_range`|Maximum communication range between drones to maintain the relay chain.|3.0 m|
+|`goal_speed`|Target speed for the moving ground vehicle (AGV).|1.0 m/s|
