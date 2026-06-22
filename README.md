@@ -2,10 +2,6 @@
 
 **ICUAS 2026** Swarm System is designed to coordinate a fleet of 5 Crazyflie nano-drones in an urban cityscape. The drones cooperatively navigate to locate ArUco markers on obstacle pillars while maintaining a communication relay chain to a moving ground vehicle (AGV). It integrates two-tier path planning, dynamic communication relays, and an event-driven battery management system.
 
-<p align="center">
-  <img src="https://via.placeholder.com/800x450?text=Insert+Demo+GIF+Here" width="800" height="450"/>
-</p>
-
 To run this project in minutes, check [Quick Start](#1-quick-start). Check other sections for more detailed information.
 
 Please kindly star :star: this project if it helps you. We take great efforts to develop and maintain it :grin::grin:.
